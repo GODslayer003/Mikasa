@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename);
 
 // ─── CONFIG ─────────────────────────────────
 const COOLDOWN = 60 * 30; // 30 minutes
+const FAIL_CHANCE = 25;   // 15% chance to find nothing
 
 function rollLevel() {
   const roll = Math.random() * 100;
@@ -58,11 +59,28 @@ export function ariseCommand(bot) {
       if (now - user.lastAriseAt < COOLDOWN) {
         const left = COOLDOWN - (now - user.lastAriseAt);
         const minutes = Math.ceil(left / 60);
-        
+
         return ctx.reply(
           `🧣 <b>Arise Cooldown</b>\n\n` +
           `⏰ <b>${minutes} minute${minutes !== 1 ? 's' : ''}</b> remaining\n\n` +
-          `«Odm gear needs maintenance.»\n` +
+          `«You are overextending. Rest. Your life depends on it.»\n` +
+          `— Mikasa`,
+          {
+            parse_mode: "HTML",
+            reply_to_message_id: ctx.message.message_id
+          }
+        );
+      }
+
+      // ─── FAILURE CHANCE ────────────────────
+      if (Math.random() * 100 < FAIL_CHANCE) {
+        user.lastAriseAt = now; // Still trigger cooldown
+        await user.save();
+
+        return ctx.reply(
+          `🧣 <b>SCAPE REPORT: EMPTY</b>\n\n` +
+          `The area is deserted. There are no allies here to recruit.\n\n` +
+          `«The world is cruel. Sometimes, you find nothing but dust. Do not lose your resolve.»\n` +
           `— Mikasa`,
           {
             parse_mode: "HTML",
@@ -131,7 +149,7 @@ export function ariseCommand(bot) {
 
       // ─── FORMAT STARS ──────────────────────
       const stars = "★".repeat(levelData.stars) + "☆".repeat(5 - levelData.stars);
-      
+
       // ─── FINAL RESPONSE ────────────────────
       await ctx.replyWithPhoto(
         { source: shadow.imagePath },
@@ -148,7 +166,7 @@ export function ariseCommand(bot) {
             `┌─ Soldiers: <b>${user.shadows.length}</b>\n` +
             `├─ Total Power: <b>${user.totalPower}</b>\n` +
             `└─ Total Stars: <b>${user.totalStars}</b>\n\n` +
-            `«We fight together.»\n` +
+            `«I will protect you. No matter what.»\n` +
             `— Mikasa`,
           parse_mode: "HTML",
           reply_to_message_id: ctx.message.message_id
@@ -161,9 +179,9 @@ export function ariseCommand(bot) {
         `⚠️ <b>System Error</b>\n\n` +
         `«Fall back and regroup. Try again.»\n` +
         `— Mikasa`,
-        { 
+        {
           parse_mode: "HTML",
-          reply_to_message_id: ctx.message.message_id 
+          reply_to_message_id: ctx.message.message_id
         }
       );
     }
