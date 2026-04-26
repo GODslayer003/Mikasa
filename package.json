@@ -4,9 +4,9 @@
   "description": "",
   "main": "src/index.js",
   "scripts": {
-    "start": "node --dns-result-order=ipv4first src/index.js",
+    "start": "node src/index.js",
     "dev": "node --watch --dns-result-order=ipv4first src/index.js",
-    "build": "ls -R && echo Build completed",
+    "build": "echo Build completed",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
