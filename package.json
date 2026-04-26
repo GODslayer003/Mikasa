@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node --dns-result-order=ipv4first src/index.js",
     "dev": "node --watch --dns-result-order=ipv4first src/index.js",
-    "build": "echo Build completed",
+    "build": "ls -R && echo Build completed",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
