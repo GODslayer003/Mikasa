@@ -1,0 +1,21 @@
+{
+  "name": "monster-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --dns-result-order=ipv4first src/index.js",
+    "dev": "node --watch --dns-result-order=ipv4first src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "mongoose": "^9.0.2",
+    "telegraf": "^4.16.3"
+  }
+}
