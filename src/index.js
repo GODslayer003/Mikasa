@@ -64,14 +64,15 @@ async function start() {
   mikasaCommand(bot);
 
   // Launch bot
+  await bot.telegram.deleteWebhook();
   await bot.launch();
   console.log("🤖 Monster Bot is running");
 
   // Health check server for Render
   const app = express();
   const port = process.env.PORT || 3000;
-  app.get("/", (req, res) => res.send("Bot is alive!"));
-  app.listen(port, () => console.log(`Health check listening on port ${port}`));
+  app.get("/", (req, res) => res.send("Bot is running 🚀"));
+  app.listen(port, () => console.log(`Server running on port ${port}`));
 }
 
 start();
