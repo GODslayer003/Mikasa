@@ -1,10 +1,13 @@
 import { GroupMember } from "../models/GroupMember.js";
 import { DailyDuo } from "../models/DailyDuo.js";
 import { DateTime } from "luxon";
-import Jimp from "jimp";
+import { createRequire } from "module";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+
+const require = createRequire(import.meta.url);
+const Jimp = require("jimp");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
