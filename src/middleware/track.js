@@ -1,5 +1,6 @@
 import { User } from "../models/User.js";
 import { Chat } from "../models/Chat.js";
+import { GroupMember } from "../models/GroupMember.js";
 
 export async function trackActivity(ctx, next) {
   try {
@@ -23,6 +24,22 @@ export async function trackActivity(ctx, next) {
         { upsert: true }
       );
     }
+    
+    // ---- GROUP MEMBER TRACKING ----
+    if (ctx.from && ctx.chat && (ctx.chat.type === "group" || ctx.chat.type === "supergroup")) {
+      await GroupMember.updateOne(
+        { userId: ctx.from.id, groupId: ctx.chat.id },
+        {
+          $set: {
+            firstName: ctx.from.first_name || null,
+            username: ctx.from.username || null,
+            lastSeenAt: new Date()
+          }
+        },
+        { upsert: true }
+      ).catch(e => console.error("GroupMember tracking error:", e));
+    }
+
 
     // ---- CHAT / GROUP TRACKING ----
     if (ctx.chat) {

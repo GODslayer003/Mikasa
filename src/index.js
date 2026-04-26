@@ -31,6 +31,7 @@ import { tatakaeCommands } from "./commands/tatakae.js";
 import { helpCommand } from "./commands/help.js";
 import { mikasaCommand } from "./commands/mikasa.js";
 import { expeditionCommand } from "./commands/expedition.js";
+import { loveCommand } from "./commands/love.js";
 
 // ─── BOOTSTRAP ─────────────────────────────
 async function start() {
@@ -65,6 +66,7 @@ async function start() {
   tatakaeCommands(bot);
   helpCommand(bot);
   expeditionCommand(bot);
+  loveCommand(bot);
   // ⚠️  mikasaCommand MUST be registered last — its on('message') listener
   //     would otherwise shadow commands registered after it.
   mikasaCommand(bot);
