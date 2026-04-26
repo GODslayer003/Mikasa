@@ -1,5 +1,6 @@
 // ─── ENV ───────────────────────────────────
 import "dotenv/config";
+import express from "express";
 
 // ─── BOT ───────────────────────────────────
 import { bot } from "./bot.js";
@@ -65,6 +66,12 @@ async function start() {
   // Launch bot
   await bot.launch();
   console.log("🤖 Monster Bot is running");
+
+  // Health check server for Render
+  const app = express();
+  const port = process.env.PORT || 3000;
+  app.get("/", (req, res) => res.send("Bot is alive!"));
+  app.listen(port, () => console.log(`Health check listening on port ${port}`));
 }
 
 start();
