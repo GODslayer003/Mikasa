@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: monster-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 3000
+      - fromGroup: monster-bot-secrets # Optional: if you use an env group
