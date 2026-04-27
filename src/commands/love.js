@@ -6,8 +6,7 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 
-const require = createRequire(import.meta.url);
-const Jimp = require("jimp");
+import { Jimp } from "jimp";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,21 +46,21 @@ async function createDuoImage(bot, user1Id, user2Id) {
         console.error("Error fetching photo for", userId, e);
       }
       // Fallback: simple gray square
-      return new Jimp(400, 400, 0xccccccff);
+      return new Jimp({ width: 400, height: 400, color: 0xccccccff });
     };
 
     const [img1, img2] = await Promise.all([getPhoto(user1Id), getPhoto(user2Id)]);
 
-    img1.cover(400, 400);
-    img2.cover(400, 400);
+    img1.cover({ w: 400, h: 400 });
+    img2.cover({ w: 400, h: 400 });
 
-    const canvas = new Jimp(800, 400, 0x000000ff);
+    const canvas = new Jimp({ width: 800, height: 400, color: 0x000000ff });
     canvas.composite(img1, 0, 0);
     canvas.composite(img2, 400, 0);
 
     // Optional: Add a simple heart in the middle (just a red square for now or skip)
     
-    await canvas.writeAsync(outPath);
+    await canvas.write(outPath);
     return outPath;
   } catch (err) {
     console.error("Image processing error:", err);

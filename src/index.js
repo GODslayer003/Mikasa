@@ -72,9 +72,19 @@ async function start() {
   mikasaCommand(bot);
 
   // Launch bot
-  await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-  await bot.launch();
-  console.log("🤖 Monster Bot is running");
+  try {
+    await bot.launch({
+      dropPendingUpdates: true,
+      allowedUpdates: []
+    });
+    console.log("🤖 Monster Bot is running");
+  } catch (err) {
+    console.error("Failed to launch bot:", err);
+    if (err.response && err.response.error_code === 409) {
+      console.log("Conflict detected. Retrying in 5 seconds...");
+      setTimeout(() => bot.launch({ dropPendingUpdates: true }), 5000);
+    }
+  }
 }
 
 start();
