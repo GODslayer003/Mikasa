@@ -39,7 +39,23 @@ async function start() {
   const app = express();
   const port = process.env.PORT || 3000;
   app.get("/", (req, res) => res.send("Bot is running 🚀"));
-  app.listen(port, () => console.log(`Server running on port ${port}`));
+  app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+    
+    // 🚀 SELF-PING (Keep-alive for Render Free Plan)
+    const publicUrl = process.env.RENDER_EXTERNAL_URL || "https://monsterbot-8v2b.onrender.com";
+    if (publicUrl) {
+      console.log(`[Keep-Alive] Starting self-ping for ${publicUrl} every 14 minutes...`);
+      setInterval(async () => {
+        try {
+          const response = await fetch(publicUrl);
+          console.log(`[Keep-Alive] Pinged ${publicUrl} - Status: ${response.status}`);
+        } catch (err) {
+          console.error(`[Keep-Alive] Ping failed: ${err.message}`);
+        }
+      }, 14 * 60 * 1000); // 14 minutes
+    }
+  });
 
   // Connect DB
   await connectDB();
