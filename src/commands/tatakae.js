@@ -378,7 +378,7 @@ export function tatakaeCommands(bot) {
   });
 
   // ─── /scarf command ───────────────────────
-  bot.command("warriors", async (ctx) => {
+  const warriorsHandler = async (ctx) => {
     try {
       const topUsers = await User.find({
         $or: [
@@ -392,21 +392,29 @@ export function tatakaeCommands(bot) {
 
       if (!topUsers.length) {
         return ctx.reply(
-          `<b>TOP 5 WARRIORS</b>\n\nNo warriors have entered battle yet.`,
+          `<b>TOP 5 WARRIORS</b>\n` +
+            `━━━━━━━━━━━━━━\n\n` +
+            `No warriors have entered battle yet.`,
           {
             parse_mode: "HTML",
-            reply_to_message_id: ctx.message.message_id
+            reply_to_message_id: ctx.message.message_id,
+            disable_notification: true
           }
         );
       }
 
       const rows = topUsers.map((user, index) => {
         const name = escapeHtml(user.firstName || "Unknown");
+        const profileLink = `<a href="tg://user?id=${user.telegramId}">${name}</a>`;
+        const totalAttacks = user.totalAttacks || 0;
+        const totalBlocks = user.totalBlocks || 0;
+        const hp = Math.max(0, user.hp || 0);
+
         return (
-          `<b>${index + 1}. ${name}</b>\n` +
-          `Total Attacks: <b>${(user.totalAttacks || 0).toLocaleString()}</b>\n` +
-          `HP: <b>${Math.max(0, user.hp || 0)}/${MAX_HP}</b>\n` +
-          `Total Blocks: <b>${(user.totalBlocks || 0).toLocaleString()}</b>`
+          `<b>${index + 1}. ${profileLink}</b>\n` +
+          `├─ Total Attacks: <b>${totalAttacks.toLocaleString()}</b>\n` +
+          `├─ HP: <b>${hp}/${MAX_HP}</b> ${getHealthBar(hp)}\n` +
+          `└─ Total Blocks: <b>${totalBlocks.toLocaleString()}</b>`
         );
       });
 
@@ -414,10 +422,11 @@ export function tatakaeCommands(bot) {
         `<b>TOP 5 WARRIORS</b>\n` +
           `━━━━━━━━━━━━━━\n\n` +
           `${rows.join("\n\n")}\n\n` +
-          `Names are shown without tagging players.`,
+          `<i>Silent profile links. No @username pings.</i>`,
         {
           parse_mode: "HTML",
-          reply_to_message_id: ctx.message.message_id
+          reply_to_message_id: ctx.message.message_id,
+          disable_notification: true
         }
       );
     } catch (err) {
@@ -426,7 +435,10 @@ export function tatakaeCommands(bot) {
         reply_to_message_id: ctx.message.message_id
       });
     }
-  });
+  };
+
+  bot.command("warriors", warriorsHandler);
+  bot.command("warrior", warriorsHandler);
 
   bot.command("scarf", async (ctx) => {
     try {

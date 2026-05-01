@@ -264,8 +264,7 @@ export function profileCommand(bot) {
           return ctx.replyWithPhoto(fileId, {
             caption,
             parse_mode: "HTML",
-            reply_to_message_id: ctx.message?.message_id,
-            reply_markup: { inline_keyboard: buttons }
+            reply_to_message_id: ctx.message?.message_id
           });
         }
       } catch (photoErr) {
@@ -276,8 +275,7 @@ export function profileCommand(bot) {
       // ─── FALLBACK: TEXT ONLY ──────────────
       await ctx.reply(caption, {
         parse_mode: "HTML",
-        reply_to_message_id: ctx.message?.message_id,
-        reply_markup: { inline_keyboard: buttons }
+        reply_to_message_id: ctx.message?.message_id
       });
 
     } catch (err) {
