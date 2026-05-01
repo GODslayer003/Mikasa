@@ -426,7 +426,7 @@ export function tatakaeCommands(bot) {
         `<b>⚔️ WARRIOR STANDINGS</b>\n` +
           `━━━━━━━━━━━━━━\n\n` +
           `${rows.join("\n\n")}\n\n` +
-          `<i>Tap a name to open the Telegram profile. No @username pings.</i>`,
+          `<i>Earn points by attacking [Tatakae]! Blocks reduce your points.</i>`,
         {
           parse_mode: "HTML",
           reply_to_message_id: ctx.message.message_id,
