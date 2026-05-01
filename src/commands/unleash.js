@@ -1,51 +1,82 @@
 // src/commands/unleash.js
-import {
-  blockedUsers,
-  blockCooldowns
-} from "../game/state.js";
-import { replyToUser } from "../utils/reply.js";
-
-const BLOCK_COOLDOWN = 600;
-
-async function unleash(player, ctx, isCallback = false) {
-  const userId = player.telegramId;
-  const now = Math.floor(Date.now() / 1000);
-  const mention = `<a href="tg://user?id=${userId}">${ctx.from.first_name}</a>`;
-
-  if (!blockedUsers.has(userId)) {
-    if (isCallback) {
-      return ctx.answerCbQuery("Shield already dropped!");
-    }
-    return replyToUser(ctx, `😅 ${mention}, no shield is active.`);
-  }
-
-  blockedUsers.delete(userId);
-  blockCooldowns.set(userId, now + BLOCK_COOLDOWN);
-  player.blockStatus = "UnImmune";
-  await player.save();
-
-  if (isCallback) {
-    await ctx.editMessageText(
-      `⚔️ ${mention} shatters their <b>Shoulder Shield</b>!\n⏳ Cooldown: 10 minutes.`,
-      { parse_mode: "HTML" }
-    );
-    return ctx.answerCbQuery("Shield dropped!");
-  }
-
-  return replyToUser(
-    ctx,
-    `⚔️ ${mention} drops their <b>Shoulder Shield</b>!\n⏳ Cooldown: 10 minutes.`
-  );
-}
+import { User } from "../models/User.js";
+import { hasMinMembers } from "../utils/group.js";
 
 export function unleashCommand(bot) {
-  bot.command("unleash", async (ctx) => unleash(ctx.player, ctx, false));
+  bot.command("unleash", async (ctx) => {
+    try {
+      if (ctx.chat.type === "private") {
+        return ctx.reply("⚠️ This command only works in groups!", {
+          reply_to_message_id: ctx.message.message_id
+        });
+      }
 
-  bot.action(/^unleash_(\d+)$/, async (ctx) => {
-    const targetId = Number(ctx.match[1]);
-    if (ctx.from.id !== targetId) {
-      return ctx.answerCbQuery("Not your shield!", { show_alert: true });
+      // Member count check (20+)
+      if (!(await hasMinMembers(ctx, 20))) {
+        return ctx.reply(
+          `🛡️ <b>Field Too Small</b>\n\n` +
+          `«This battlefield is too small for my attention. Find a larger group [20+ members].»\n` +
+          `— Mikasa`,
+          {
+            parse_mode: "HTML",
+            reply_to_message_id: ctx.message.message_id
+          }
+        );
+      }
+
+      const userId = ctx.from.id;
+      const mention = `<a href="tg://user?id=${userId}">${ctx.from.first_name}</a>`;
+      const now = Math.floor(Date.now() / 1000);
+
+      let user = await User.findOne({ telegramId: userId });
+      if (!user) {
+        return ctx.reply("❌ Use /start first.", {
+          reply_to_message_id: ctx.message.message_id
+        });
+      }
+
+      // Check if actually immune
+      if (!user.immuneUntil || user.immuneUntil <= now) {
+        return ctx.reply(
+          `❌ <b>No Immunity to Unleash</b>\n\n` +
+          `${mention}, you are not currently under protection.\n\n` +
+          `«You don't need to unleash what isn't there.»\n` +
+          `— Mikasa`,
+          {
+            parse_mode: "HTML",
+            reply_to_message_id: ctx.message.message_id
+          }
+        );
+      }
+
+      // Deactivate immunity
+      user.immuneUntil = 0;
+
+      // Random cooldown: 5-15 minutes
+      const randomMinutes = Math.floor(Math.random() * (15 - 5 + 1)) + 5;
+      const cooldownSeconds = randomMinutes * 60;
+      user.immuneCooldownUntil = now + cooldownSeconds;
+
+      await user.save();
+
+      await ctx.reply(
+        `⚔️ <b>SPIRIT UNLEASHED</b>\n\n` +
+        `${mention} has dropped their protection and returned to the fray!\n\n` +
+        `🔓 /tatakae is now active for you.\n` +
+        `⏳ /immune restricted for <b>${randomMinutes} minutes</b>.\n\n` +
+        `«If you don't fight, you can't win. TATAKAE!»\n` +
+        `— Mikasa`,
+        {
+          parse_mode: "HTML",
+          reply_to_message_id: ctx.message.message_id
+        }
+      );
+
+    } catch (err) {
+      console.error("Unleash error:", err);
+      ctx.reply("⚠️ Something went wrong.", {
+        reply_to_message_id: ctx.message.message_id
+      });
     }
-    return unleash(ctx.player, ctx, true);
   });
 }

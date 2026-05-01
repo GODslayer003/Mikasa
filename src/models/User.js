@@ -54,6 +54,7 @@ const userSchema = new mongoose.Schema(
     moons: { type: Number, default: 1000 },    // 🌙 Moons Coins (main currency)
     lastLootAt: { type: Number, default: 0 },
     immuneUntil: { type: Number, default: 0 },
+    immuneCooldownUntil: { type: Number, default: 0 },
     stars: { type: Number, default: 0 },       // Optional legacy/global stars
 
     // ─── SHADOW SYSTEM (CRITICAL) ─────────────────────
@@ -142,6 +143,11 @@ userSchema.methods.canUseTatakae = function () {
     return false;
   }
 
+  // Check if immune
+  if (this.immuneUntil && now < this.immuneUntil) {
+    return false;
+  }
+
   return true;
 };
 
@@ -164,6 +170,11 @@ userSchema.methods.canBeAttacked = function () {
 
   // Check if under Mikasa's protection
   if (this.mikasaProtectionUntil && now < this.mikasaProtectionUntil) {
+    return false;
+  }
+
+  // Check if immune
+  if (this.immuneUntil && now < this.immuneUntil) {
     return false;
   }
 

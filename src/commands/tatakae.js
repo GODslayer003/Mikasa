@@ -196,6 +196,17 @@ export function tatakaeCommands(bot) {
         );
       }
 
+      // Check if attacker is immune
+      if (attacker.immuneUntil && now < attacker.immuneUntil) {
+        return ctx.reply(
+          `🛡️ <b>Immunity Active</b>\n\n` +
+          `You are under Mikasa's protection and cannot attack.\n\n` +
+          `«You're safe now. Don't go looking for trouble.»\n` +
+          `— Mikasa`,
+          { parse_mode: "HTML", reply_to_message_id: ctx.message.message_id }
+        );
+      }
+
       // Check attacker cooldown (from block) - FIXED: Only check if tatakaeCooldown > 0
       if (attacker.tatakaeCooldown > 0 && attacker.lastTatakaeAt && 
           (now - attacker.lastTatakaeAt < attacker.tatakaeCooldown)) {
@@ -245,6 +256,18 @@ export function tatakaeCommands(bot) {
           `${targetName} is wearing Mikasa's scarf.\n` +
           `They are protected from attacks.\n\n` +
           `«The scarf protects them.»\n` +
+          `— Mikasa`,
+          { parse_mode: "HTML", reply_to_message_id: ctx.message.message_id }
+        );
+      }
+
+      // Check if target is immune
+      if (target.immuneUntil && now < target.immuneUntil) {
+        return ctx.reply(
+          `🛡️ <b>Target Immune</b>\n\n` +
+          `${targetName} is under Mikasa's protection.\n` +
+          `They cannot be attacked.\n\n` +
+          `«I won't let you touch them.»\n` +
           `— Mikasa`,
           { parse_mode: "HTML", reply_to_message_id: ctx.message.message_id }
         );
