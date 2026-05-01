@@ -43,6 +43,10 @@ const userSchema = new mongoose.Schema(
     tatakaeCooldown: { type: Number, default: 0 }, // Cooldown from block
     scarfUsedAt: { type: Number, default: 0 }, // Last /scarf command use
     defeatedAt: { type: Number, default: 0 }, // When HP reached 0
+    healthRestoreDueAt: { type: Number, default: 0, index: true },
+    healthRestoredAt: { type: Number, default: 0 },
+    defeatedChatId: { type: Number, default: null },
+    defeatedChatTitle: { type: String, default: null },
     mikasaProtectionUntil: { type: Number, default: 0 }, // Protection from Mikasa image
 
     // ─── ECONOMY ─────────────────────────────────────
@@ -64,6 +68,7 @@ const userSchema = new mongoose.Schema(
     // ─── COMBAT (FUTURE PVP) ──────────────────────────
     successfulAttacks: { type: Number, default: 0 },
     totalAttacks: { type: Number, default: 0 },
+    totalBlocks: { type: Number, default: 0 },
 
     // ─── DEFENSE ──────────────────────────────────────
     blockStatus: {
@@ -118,7 +123,8 @@ userSchema.methods.canUseTatakae = function () {
   const now = Math.floor(Date.now() / 1000);
 
   // Check if defeated
-  if (this.defeatedAt && (now - this.defeatedAt < 24 * 60 * 60)) {
+  const restoreDueAt = this.healthRestoreDueAt || (this.defeatedAt ? this.defeatedAt + 10 * 60 * 60 : 0);
+  if (this.defeatedAt && now < restoreDueAt) {
     return false;
   }
 
@@ -143,7 +149,8 @@ userSchema.methods.canBeAttacked = function () {
   const now = Math.floor(Date.now() / 1000);
 
   // Check if defeated
-  if (this.defeatedAt && (now - this.defeatedAt < 24 * 60 * 60)) {
+  const restoreDueAt = this.healthRestoreDueAt || (this.defeatedAt ? this.defeatedAt + 10 * 60 * 60 : 0);
+  if (this.defeatedAt && now < restoreDueAt) {
     return false;
   }
 
@@ -179,9 +186,8 @@ userSchema.methods.getDefeatCooldown = function () {
   const now = Math.floor(Date.now() / 1000);
   if (!this.defeatedAt) return 0;
 
-  const cooldown = 24 * 60 * 60; // 24 hours
-  const elapsed = now - this.defeatedAt;
-  return Math.max(0, cooldown - elapsed);
+  const restoreDueAt = this.healthRestoreDueAt || (this.defeatedAt + 10 * 60 * 60);
+  return Math.max(0, restoreDueAt - now);
 };
 
 /**

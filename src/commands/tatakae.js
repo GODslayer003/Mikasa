@@ -1,5 +1,11 @@
 // src/commands/tatakae.js
 import { User } from "../models/User.js";
+import {
+  DEFEAT_RECOVERY_SECONDS,
+  MAX_TATAKAE_HP,
+  getDefeatRestoreDueAt,
+  restoreExpiredDefeat
+} from "../services/tatakaeRecovery.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -17,8 +23,8 @@ const FOLDER_CONFIG = {
   mikasa: { chance: 5, hpEffect: [0, 0], coins: 500, cooldown: 60 } // 1 minute protection
 };
 
-const MAX_HP = 100;
-const DEFEAT_COOLDOWN = 24 * 60 * 60; // 24 hours
+const MAX_HP = MAX_TATAKAE_HP;
+const DEFEAT_COOLDOWN = DEFEAT_RECOVERY_SECONDS; // 10 hours
 const SCARF_COOLDOWN = 10 * 60; // 10 minutes
 const DEFEAT_REWARD = 1000; // Coins for defeating someone
 
@@ -74,6 +80,20 @@ function getHealthBar(hp) {
 }
 
 // ─── COMMANDS ───────────────────────────────
+function escapeHtml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function saveIfRecovered(user, now) {
+  if (!restoreExpiredDefeat(user, now)) return false;
+  await user.save();
+  return true;
+}
+
 export function tatakaeCommands(bot) {
   // ─── /tatakae command ──────────────────────
   bot.command("tatakae", async (ctx) => {
@@ -144,10 +164,11 @@ export function tatakaeCommands(bot) {
           moons: 1000
         });
       }
+      await saveIfRecovered(attacker, now);
 
       // Check if attacker is defeated
-      if (attacker.defeatedAt && (now - attacker.defeatedAt < DEFEAT_COOLDOWN)) {
-        const remaining = DEFEAT_COOLDOWN - (now - attacker.defeatedAt);
+      if (attacker.defeatedAt && now < getDefeatRestoreDueAt(attacker)) {
+        const remaining = getDefeatRestoreDueAt(attacker) - now;
         return ctx.reply(
           `💀 <b>You Are Defeated</b>\n\n` +
           `You cannot attack while recovering.\n` +
@@ -198,9 +219,10 @@ export function tatakaeCommands(bot) {
           moons: 1000
         });
       }
+      await saveIfRecovered(target, now);
 
       // Check if target is defeated
-      if (target.defeatedAt && (now - target.defeatedAt < DEFEAT_COOLDOWN)) {
+      if (target.defeatedAt && now < getDefeatRestoreDueAt(target)) {
         return ctx.reply(
           `💀 <b>Target Defeated</b>\n\n` +
           `${targetName} is already defeated.\n` +
@@ -247,6 +269,8 @@ export function tatakaeCommands(bot) {
       let attackerReward = 0;
       let targetDefeated = false;
       
+      attacker.totalAttacks = (attacker.totalAttacks || 0) + 1;
+
       // Reset cooldown if not block (FIXED: Only set cooldown for block)
       if (folder !== 'block') {
         attacker.tatakaeCooldown = 0; // Clear any existing cooldown
@@ -276,6 +300,7 @@ export function tatakaeCommands(bot) {
       } else if (folder === 'block') {
         // Block: Target gains HP, attacker gets cooldown
         target.hp = Math.min(MAX_HP, target.hp + hpEffect);
+        target.totalBlocks = (target.totalBlocks || 0) + 1;
         attacker.tatakaeCooldown = config.cooldown; // Only set cooldown for block
         caption = `🛡️ <b>SUCCESSFUL BLOCK</b>\n\n` +
                  `${targetName} blocks the attack!\n` +
@@ -287,6 +312,7 @@ export function tatakaeCommands(bot) {
       } else {
         // Attack/Sasageyo/Eren: Target loses HP
         target.hp = Math.max(0, target.hp + hpEffect); // hpEffect is negative
+        attacker.successfulAttacks = (attacker.successfulAttacks || 0) + 1;
         
         const actionName = folder === 'eren' ? 'EREN\'S RAGE' :
                           folder === 'sasageyo' ? 'SASAGEYO CHARGE' : 'ATTACK';
@@ -309,11 +335,15 @@ export function tatakaeCommands(bot) {
           targetDefeated = true;
           target.hp = 0;
           target.defeatedAt = now;
+          target.healthRestoreDueAt = now + DEFEAT_COOLDOWN;
+          target.healthRestoredAt = 0;
+          target.defeatedChatId = ctx.chat.id;
+          target.defeatedChatTitle = ctx.chat.title || null;
           attacker.moons = (attacker.moons || 0) + DEFEAT_REWARD;
           caption += `\n\n💀 <b>DEFEAT!</b>\n` +
                     `${targetName} has been defeated!\n` +
                     `💰 ${attackerName} gains +${DEFEAT_REWARD} Moons\n` +
-                    `⏳ ${targetName} is out for 24 hours`;
+                    `⏳ ${targetName} is out for 10 hours`;
         }
       }
 
@@ -348,6 +378,56 @@ export function tatakaeCommands(bot) {
   });
 
   // ─── /scarf command ───────────────────────
+  bot.command("warriors", async (ctx) => {
+    try {
+      const topUsers = await User.find({
+        $or: [
+          { totalAttacks: { $gt: 0 } },
+          { totalBlocks: { $gt: 0 } },
+          { hp: { $lt: MAX_HP } }
+        ]
+      })
+        .sort({ totalAttacks: -1, totalBlocks: -1, hp: -1, lastTatakaeAt: -1 })
+        .limit(5);
+
+      if (!topUsers.length) {
+        return ctx.reply(
+          `<b>TOP 5 WARRIORS</b>\n\nNo warriors have entered battle yet.`,
+          {
+            parse_mode: "HTML",
+            reply_to_message_id: ctx.message.message_id
+          }
+        );
+      }
+
+      const rows = topUsers.map((user, index) => {
+        const name = escapeHtml(user.firstName || "Unknown");
+        return (
+          `<b>${index + 1}. ${name}</b>\n` +
+          `Total Attacks: <b>${(user.totalAttacks || 0).toLocaleString()}</b>\n` +
+          `HP: <b>${Math.max(0, user.hp || 0)}/${MAX_HP}</b>\n` +
+          `Total Blocks: <b>${(user.totalBlocks || 0).toLocaleString()}</b>`
+        );
+      });
+
+      await ctx.reply(
+        `<b>TOP 5 WARRIORS</b>\n` +
+          `━━━━━━━━━━━━━━\n\n` +
+          `${rows.join("\n\n")}\n\n` +
+          `Names are shown without tagging players.`,
+        {
+          parse_mode: "HTML",
+          reply_to_message_id: ctx.message.message_id
+        }
+      );
+    } catch (err) {
+      console.error("WARRIORS ERROR:", err);
+      await ctx.reply("Unable to fetch warriors right now.", {
+        reply_to_message_id: ctx.message.message_id
+      });
+    }
+  });
+
   bot.command("scarf", async (ctx) => {
     try {
       const userId = ctx.from.id;
@@ -501,8 +581,10 @@ export function tatakaeCommands(bot) {
       let status = `🟢 Active`;
       let statusDetails = '';
       
-      if (user.defeatedAt && (now - user.defeatedAt < DEFEAT_COOLDOWN)) {
-        const remaining = DEFEAT_COOLDOWN - (now - user.defeatedAt);
+      await saveIfRecovered(user, now);
+
+      if (user.defeatedAt && now < getDefeatRestoreDueAt(user)) {
+        const remaining = getDefeatRestoreDueAt(user) - now;
         status = `💀 Defeated`;
         statusDetails = `⏳ Back in: ${formatTime(remaining)}`;
       } else if (user.isScarfed) {

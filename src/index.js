@@ -7,6 +7,7 @@ import { bot } from "./bot.js";
 
 // ─── DATABASE ──────────────────────────────
 import { connectDB } from "./db.js";
+import { startTatakaeRecoveryWorker } from "./services/tatakaeRecovery.js";
 
 // ─── GLOBAL ACTIVITY TRACKER ───────────────
 import { trackActivity } from "./middleware/track.js";
@@ -59,6 +60,7 @@ async function start() {
 
   // Connect DB
   await connectDB();
+  startTatakaeRecoveryWorker(bot);
 
   // GLOBAL TRACKER
   bot.use(trackActivity);

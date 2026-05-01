@@ -15,6 +15,7 @@ export function helpCommand(bot) {
 <b>⚔️ COMBAT & POWER</b>
 • /train - Level up your power.
 • /tatakae - Fight for glory.
+• /warriors - Top 5 battle warriors.
 • /duel - Challenge a player.
 • /arise - Awaken inner power.
 • /shadow - Enter shadow realm.
