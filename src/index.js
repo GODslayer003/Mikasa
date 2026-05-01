@@ -34,6 +34,35 @@ import { mikasaCommand } from "./commands/mikasa.js";
 import { expeditionCommand } from "./commands/expedition.js";
 import { loveCommand } from "./commands/love.js";
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isTelegramConflict(err) {
+  return err?.response?.error_code === 409;
+}
+
+async function launchBotWithRetry() {
+  while (true) {
+    try {
+      await bot.launch({
+        dropPendingUpdates: true,
+        allowedUpdates: []
+      });
+      console.log("🤖 Monster Bot is running");
+      return;
+    } catch (err) {
+      if (!isTelegramConflict(err)) {
+        console.error("Failed to launch bot:", err);
+        throw err;
+      }
+
+      console.error(
+        "Telegram polling conflict detected. Another bot instance is using this token. Retrying in 15 seconds..."
+      );
+      await sleep(15 * 1000);
+    }
+  }
+}
+
 // ─── BOOTSTRAP ─────────────────────────────
 async function start() {
   // 🔥 Start health check server IMMEDIATELY for Render
@@ -60,7 +89,6 @@ async function start() {
 
   // Connect DB
   await connectDB();
-  startTatakaeRecoveryWorker(bot);
 
   // GLOBAL TRACKER
   bot.use(trackActivity);
@@ -88,21 +116,9 @@ async function start() {
   // ⚠️  mikasaCommand MUST be registered last — its on('message') listener
   //     would otherwise shadow commands registered after it.
   mikasaCommand(bot);
+  startTatakaeRecoveryWorker(bot);
 
-  // Launch bot
-  try {
-    await bot.launch({
-      dropPendingUpdates: true,
-      allowedUpdates: []
-    });
-    console.log("🤖 Monster Bot is running");
-  } catch (err) {
-    console.error("Failed to launch bot:", err);
-    if (err.response && err.response.error_code === 409) {
-      console.log("Conflict detected. Retrying in 5 seconds...");
-      setTimeout(() => bot.launch({ dropPendingUpdates: true }), 5000);
-    }
-  }
+  await launchBotWithRetry();
 }
 
 start();
