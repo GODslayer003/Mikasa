@@ -19,6 +19,7 @@ import { gambleCommand } from "./commands/gamble.js";
 import { topperCommand } from "./commands/topper.js";
 import { betCommand } from "./commands/bet.js";
 import { immuneCommand } from "./commands/immune.js";
+import { unleashCommand } from "./commands/unleash.js";
 import { lootCommand } from "./commands/loot.js";
 import { duelCommand } from "./commands/duel.js";
 import { ariseCommand } from "./commands/arise.js";
@@ -100,6 +101,7 @@ async function start() {
   topperCommand(bot);
   betCommand(bot);
   immuneCommand(bot);
+  unleashCommand(bot);
   lootCommand(bot);
   duelCommand(bot);
   ariseCommand(bot);
