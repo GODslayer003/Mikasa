@@ -140,6 +140,7 @@ export function profileCommand(bot) {
           username: ctx.from.username,
           xp: 0,
           balance: 1000,
+          moons: 1000,
           level: 1,
           shadows: [],
           totalStars: 0,
@@ -163,6 +164,7 @@ export function profileCommand(bot) {
       const rankTitle = getRankTitle(levelInfo.level);
       const trainingStatus = getTrainingStatus(user.trainingWins || 0, user.trainingLosses || 0);
       const winRatePercent = winRate(user.trainingWins || 0, user.trainingLosses || 0);
+      const moonsBalance = typeof user.moons === "number" ? user.moons : user.balance || 0;
       
       // Progress bar for level
       const levelProgressBar = createProgressBar(levelInfo.progressPercent);
@@ -188,9 +190,9 @@ export function profileCommand(bot) {
         `└─ Progress: ${levelProgressBar} ${levelInfo.progressPercent}%\n\n` +
         
         `💰 <b>ECONOMY STATUS</b>\n` +
-        `├─ Moons Balance: <b>${user.balance || 0} 🌙</b>\n` +
+        `├─ Moons Balance: <b>${moonsBalance} 🌙</b>\n` +
         `├─ Daily Income: ~${Math.floor((user.xp || 0) / 10)} 🌙\n` +
-        `└─ Wealth Status: ${user.balance >= 10000 ? "Rich" : user.balance >= 5000 ? "Wealthy" : user.balance >= 1000 ? "Stable" : "Developing"}\n\n` +
+        `└─ Wealth Status: ${moonsBalance >= 10000 ? "Rich" : moonsBalance >= 5000 ? "Wealthy" : moonsBalance >= 1000 ? "Stable" : "Developing"}\n\n` +
         
         `⚔️ <b>MILITARY STRENGTH</b>\n` +
         `├─ Soldiers: <b>${user.shadows?.length || 0}</b>\n` +

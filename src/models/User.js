@@ -52,6 +52,8 @@ const userSchema = new mongoose.Schema(
     // ─── ECONOMY ─────────────────────────────────────
     balance: { type: Number, default: 1000 },  // 🌙 Moons Coins (legacy - use moons)
     moons: { type: Number, default: 1000 },    // 🌙 Moons Coins (main currency)
+    lastLootAt: { type: Number, default: 0 },
+    immuneUntil: { type: Number, default: 0 },
     stars: { type: Number, default: 0 },       // Optional legacy/global stars
 
     // ─── SHADOW SYSTEM (CRITICAL) ─────────────────────
@@ -69,6 +71,7 @@ const userSchema = new mongoose.Schema(
     successfulAttacks: { type: Number, default: 0 },
     totalAttacks: { type: Number, default: 0 },
     totalBlocks: { type: Number, default: 0 },
+    totalPoints: { type: Number, default: 0, index: true },
 
     // ─── DEFENSE ──────────────────────────────────────
     blockStatus: {
@@ -202,7 +205,8 @@ userSchema.methods.getHPPercentage = function () {
  * Helper method to get total coins (moons + balance for backward compatibility)
  */
 userSchema.methods.getTotalCoins = function () {
-  return (this.moons || 0) + (this.balance || 0);
+  if (typeof this.moons === "number") return this.moons;
+  return this.balance || 0;
 };
 
 export const User = mongoose.model("User", userSchema);

@@ -18,6 +18,8 @@ export async function trackActivity(ctx, next) {
           },
           $setOnInsert: {
             telegramId: ctx.from.id,
+            balance: 1000,
+            moons: 1000,
             firstSeenAt: now
           }
         },

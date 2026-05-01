@@ -88,6 +88,11 @@ function escapeHtml(value = "") {
     .replace(/"/g, "&quot;");
 }
 
+function formatPoints(points = 0) {
+  const value = Number(points) || 0;
+  return `${value > 0 ? "+" : ""}${value.toLocaleString()}`;
+}
+
 async function saveIfRecovered(user, now) {
   if (!restoreExpiredDefeat(user, now)) return false;
   await user.save();
@@ -301,10 +306,12 @@ export function tatakaeCommands(bot) {
         // Block: Target gains HP, attacker gets cooldown
         target.hp = Math.min(MAX_HP, target.hp + hpEffect);
         target.totalBlocks = (target.totalBlocks || 0) + 1;
+        attacker.totalPoints = (attacker.totalPoints || 0) - hpEffect;
         attacker.tatakaeCooldown = config.cooldown; // Only set cooldown for block
         caption = `🛡️ <b>SUCCESSFUL BLOCK</b>\n\n` +
                  `${targetName} blocks the attack!\n` +
                  `💚 +${hpEffect} HP for ${targetName}\n` +
+                 `📉 ${attackerName}: <b>-${hpEffect} Total Points</b>\n` +
                  `${getHealthBar(target.hp)} ${target.hp}/${MAX_HP}\n` +
                  `⏳ ${attackerName} cooldown: 1 minute\n\n` +
                  `«Your attack was deflected.»\n— Mikasa`;
@@ -313,6 +320,8 @@ export function tatakaeCommands(bot) {
         // Attack/Sasageyo/Eren: Target loses HP
         target.hp = Math.max(0, target.hp + hpEffect); // hpEffect is negative
         attacker.successfulAttacks = (attacker.successfulAttacks || 0) + 1;
+        const pointsGained = Math.abs(hpEffect);
+        attacker.totalPoints = (attacker.totalPoints || 0) + pointsGained;
         
         const actionName = folder === 'eren' ? 'EREN\'S RAGE' :
                           folder === 'sasageyo' ? 'SASAGEYO CHARGE' : 'ATTACK';
@@ -320,6 +329,7 @@ export function tatakaeCommands(bot) {
         caption = `⚔️ <b>${actionName}</b>\n\n` +
                  `${attackerName} attacks ${targetName}!\n` +
                  `💔 ${Math.abs(hpEffect)} HP to ${targetName}\n` +
+                 `📈 ${attackerName}: <b>+${pointsGained} Total Points</b>\n` +
                  `${getHealthBar(target.hp)} ${target.hp}/${MAX_HP}\n\n`;
         
         if (folder === 'eren') {
@@ -382,19 +392,19 @@ export function tatakaeCommands(bot) {
     try {
       const topUsers = await User.find({
         $or: [
+          { totalPoints: { $ne: 0 } },
           { totalAttacks: { $gt: 0 } },
-          { totalBlocks: { $gt: 0 } },
-          { hp: { $lt: MAX_HP } }
+          { totalBlocks: { $gt: 0 } }
         ]
       })
-        .sort({ totalAttacks: -1, totalBlocks: -1, hp: -1, lastTatakaeAt: -1 })
+        .sort({ totalPoints: -1, lastTatakaeAt: -1 })
         .limit(5);
 
       if (!topUsers.length) {
         return ctx.reply(
-          `<b>TOP 5 WARRIORS</b>\n` +
+          `<b>⚔️ WARRIOR STANDINGS</b>\n` +
             `━━━━━━━━━━━━━━\n\n` +
-            `No warriors have entered battle yet.`,
+            `<i>No warriors have earned battle points yet.</i>`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id,
@@ -403,26 +413,20 @@ export function tatakaeCommands(bot) {
         );
       }
 
+      const medals = ["I", "II", "III", "IV", "V"];
       const rows = topUsers.map((user, index) => {
         const name = escapeHtml(user.firstName || "Unknown");
         const profileLink = `<a href="tg://user?id=${user.telegramId}">${name}</a>`;
-        const totalAttacks = user.totalAttacks || 0;
-        const totalBlocks = user.totalBlocks || 0;
-        const hp = Math.max(0, user.hp || 0);
+        const points = user.totalPoints || 0;
 
-        return (
-          `<b>${index + 1}. ${profileLink}</b>\n` +
-          `├─ Total Attacks: <b>${totalAttacks.toLocaleString()}</b>\n` +
-          `├─ HP: <b>${hp}/${MAX_HP}</b> ${getHealthBar(hp)}\n` +
-          `└─ Total Blocks: <b>${totalBlocks.toLocaleString()}</b>`
-        );
+        return `<b>${medals[index]}.</b> ${profileLink} - <b>${formatPoints(points)} Points</b>`;
       });
 
       await ctx.reply(
-        `<b>TOP 5 WARRIORS</b>\n` +
+        `<b>⚔️ WARRIOR STANDINGS</b>\n` +
           `━━━━━━━━━━━━━━\n\n` +
           `${rows.join("\n\n")}\n\n` +
-          `<i>Silent profile links. No @username pings.</i>`,
+          `<i>Tap a name to open the Telegram profile. No @username pings.</i>`,
         {
           parse_mode: "HTML",
           reply_to_message_id: ctx.message.message_id,

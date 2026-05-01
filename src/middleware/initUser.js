@@ -18,6 +18,7 @@ export async function initUser(ctx, next) {
       level: 1,
       stars: 0,
       balance: 1000,
+      moons: 1000,
       successfulAttacks: 0,
       totalAttacks: 0,
       blockStatus: "UnImmune"

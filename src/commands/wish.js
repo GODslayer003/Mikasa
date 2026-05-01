@@ -4,17 +4,18 @@ import path from "path";
 import { User } from "../models/User.js";
 import { WISH_COOLDOWN } from "../game/state.js";
 
-// ─── ASSET DIRECTORIES ─────────────────────
 const WISH_ON_DIR = "assets/WISH ON";
 const WISH_OFF_DIR = "assets/WISH OFF";
+const STARTING_MOONS = 1000;
+const WISH_SUCCESS_REWARD = 100;
+const WISH_FAILURE_PENALTY = 10;
 
-// ─── HELPERS ───────────────────────────────
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function randomGif(dir) {
   try {
     if (!fs.existsSync(dir)) return null;
-    const files = fs.readdirSync(dir).filter(f => f.endsWith(".gif"));
+    const files = fs.readdirSync(dir).filter((file) => file.endsWith(".gif"));
     if (!files.length) return null;
     return path.join(dir, files[Math.floor(Math.random() * files.length)]);
   } catch {
@@ -22,7 +23,26 @@ function randomGif(dir) {
   }
 }
 
-// ─── COMMAND ───────────────────────────────
+function escapeHtml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function getMoons(user) {
+  if (typeof user.moons === "number") return Math.max(0, user.moons);
+  if (typeof user.balance === "number") return Math.max(0, user.balance);
+  return STARTING_MOONS;
+}
+
+function setMoons(user, amount) {
+  const value = Math.max(0, Math.floor(amount));
+  user.moons = value;
+  user.balance = value;
+}
+
 export function wishCommand(bot) {
   bot.command("wish", async (ctx) => {
     const replyId = ctx.message?.message_id;
@@ -33,19 +53,15 @@ export function wishCommand(bot) {
 
       const userId = ctx.from.id;
       const name = ctx.from.first_name || "Dreamer";
-      const mention = `<a href="tg://user?id=${userId}">${name}</a>`;
+      const safeName = escapeHtml(name);
+      const mention = `<a href="tg://user?id=${userId}">${safeName}</a>`;
 
-      // ─── PARSE WISH TEXT ──────────────────
-      const wishText = ctx.message.text
-        .split(" ")
-        .slice(1)
-        .join(" ")
-        .trim();
+      const wishText = ctx.message.text.split(" ").slice(1).join(" ").trim();
 
       if (!wishText) {
         return ctx.reply(
           "🌙 <b>Whisper your desire</b>\n\n" +
-          "Usage:\n<code>/wish I want to rule the underworld</code>",
+            "Usage:\n<code>/wish I want to rule the underworld</code>",
           {
             parse_mode: "HTML",
             reply_to_message_id: replyId
@@ -53,27 +69,28 @@ export function wishCommand(bot) {
         );
       }
 
-      // ─── FETCH / CREATE USER ──────────────
       const user = await User.findOneAndUpdate(
         { telegramId: userId },
         {
+          $set: {
+            firstName: name,
+            username: ctx.from.username || null
+          },
           $setOnInsert: {
             telegramId: userId,
-            firstName: name
+            balance: STARTING_MOONS,
+            moons: STARTING_MOONS
           }
         },
         { new: true, upsert: true }
       );
 
-      // ─── COOLDOWN CHECK ───────────────────
       if (user.lastWishAt && now - user.lastWishAt < WISH_COOLDOWN) {
-        const left = Math.ceil(
-          (WISH_COOLDOWN - (now - user.lastWishAt)) / 60
-        );
+        const left = Math.ceil((WISH_COOLDOWN - (now - user.lastWishAt)) / 60);
 
         return ctx.reply(
           `⏳ ${mention}, the cosmos is silent.\n` +
-          `Try again in <b>${left} minute(s)</b>.`,
+            `Try again in <b>${left} minute${left === 1 ? "" : "s"}</b>.`,
           {
             parse_mode: "HTML",
             reply_to_message_id: replyId
@@ -81,14 +98,10 @@ export function wishCommand(bot) {
         );
       }
 
-      // ─── CINEMATIC SEQUENCE ───────────────
-      const thinking = await ctx.reply(
-        `🔮 Analyzing ${mention}'s desire...`,
-        {
-          parse_mode: "HTML",
-          reply_to_message_id: replyId
-        }
-      );
+      const thinking = await ctx.reply(`🔮 Analyzing ${mention}'s desire...`, {
+        parse_mode: "HTML",
+        reply_to_message_id: replyId
+      });
 
       await sleep(1200);
       await ctx.telegram.editMessageText(
@@ -109,10 +122,8 @@ export function wishCommand(bot) {
       await sleep(1200);
       await ctx.telegram.deleteMessage(ctx.chat.id, thinking.message_id);
 
-      // ─── ROLL ─────────────────────────────
       const roll = Math.floor(Math.random() * 100) + 1;
       const success = roll >= 50;
-
       const barFilled = Math.floor(roll / 10);
       const bar = "■".repeat(barFilled) + "□".repeat(10 - barFilled);
 
@@ -123,33 +134,35 @@ export function wishCommand(bot) {
       else if (roll >= 30) rating = "🌙 <b>FRAGILE WISH</b>";
       else rating = "🌑 <b>DISTANT WISH</b>";
 
-      // ─── ASSET ────────────────────────────
-      const gif = success
-        ? randomGif(WISH_ON_DIR)
-        : randomGif(WISH_OFF_DIR);
+      const gif = success ? randomGif(WISH_ON_DIR) : randomGif(WISH_OFF_DIR);
 
-      // ─── UPDATE USER ──────────────────────
-      user.wishCount += 1;
-      if (success) user.wishSuccess += 1;
+      user.wishCount = (user.wishCount || 0) + 1;
+      if (success) user.wishSuccess = (user.wishSuccess || 0) + 1;
+
+      const moonDelta = success ? WISH_SUCCESS_REWARD : -WISH_FAILURE_PENALTY;
+      setMoons(user, getMoons(user) + moonDelta);
       user.lastWishAt = now;
       await user.save();
 
-      // ─── FINAL MESSAGE ────────────────────
       const caption =
-        `🌟 <b>WISH VERDICT</b> 🌟\n\n` +
-        `👤 Dreamer: ${mention}\n` +
-        `✨ Wish: <i>"${wishText}"</i>\n\n` +
+        `🌟 <b>WISH VERDICT</b> 🌟\n` +
+        `━━━━━━━━━━━━━━\n\n` +
+        `Dreamer: ${mention}\n` +
+        `Wish: <i>"${escapeHtml(wishText)}"</i>\n\n` +
         `${rating}\n` +
-        `🎲 Destiny Roll: <b>${roll}%</b>\n` +
+        `Destiny Roll: <b>${roll}%</b>\n` +
         `[${bar}]\n\n` +
         (success
-          ? "🎉 The universe bends to your will."
-          : "🌑 The cosmos delays your destiny.") +
-        `\n\n📊 Total Wishes: <b>${user.wishCount}</b>\n` +
-        `⭐ Successful Wishes: <b>${user.wishSuccess}</b>`;
+          ? `The universe bends to your will.\n🌙 Reward: <b>+${WISH_SUCCESS_REWARD} Moons</b>`
+          : `The cosmos delays your destiny.\n🌙 Cost: <b>-${WISH_FAILURE_PENALTY} Moons</b>`) +
+        `\n\nTotal Wishes: <b>${user.wishCount}</b>\n` +
+        `Successful Wishes: <b>${user.wishSuccess || 0}</b>\n` +
+        `Moons Balance: <b>${getMoons(user).toLocaleString()} Moons</b>\n\n` +
+        `<i>“Your resolve decides how far the stars will listen.”</i>\n` +
+        `— Mikasa`;
 
       if (gif) {
-        await ctx.replyWithAnimation(
+        return ctx.replyWithAnimation(
           { source: gif },
           {
             caption,
@@ -157,21 +170,17 @@ export function wishCommand(bot) {
             reply_to_message_id: replyId
           }
         );
-      } else {
-        await ctx.reply(caption, {
-          parse_mode: "HTML",
-          reply_to_message_id: replyId
-        });
       }
 
+      return ctx.reply(caption, {
+        parse_mode: "HTML",
+        reply_to_message_id: replyId
+      });
     } catch (err) {
       console.error("Wish error:", err);
-      await ctx.reply(
-        "🌪️ The cosmic flow fractured.\nTry again later.",
-        {
-          reply_to_message_id: replyId
-        }
-      );
+      return ctx.reply("🌪️ The cosmic flow fractured.\nTry again later.", {
+        reply_to_message_id: replyId
+      });
     }
   });
 }
