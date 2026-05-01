@@ -1,9 +1,9 @@
 import { User } from "../models/User.js";
 
 export const MAX_TATAKAE_HP = 100;
-export const DEFEAT_RECOVERY_SECONDS = 60;
+export const DEFEAT_RECOVERY_SECONDS = 10 * 60 * 60;
 // export const DEFEAT_RECOVERY_SECONDS = 10 * 60 * 60;
-const RECOVERY_SCAN_MS = 5 * 1000;
+const RECOVERY_SCAN_MS = 60 * 1000;
 // const RECOVERY_SCAN_MS = 60 * 1000;
 
 function nowSeconds() {
@@ -47,7 +47,7 @@ async function notifyHealthRestored(bot, user) {
   await bot.telegram.sendMessage(
     user.defeatedChatId,
     `${mentionUser(user)}, your health has been restored to <b>${MAX_TATAKAE_HP}/${MAX_TATAKAE_HP} HP</b>.\n\n` +
-      `You can return to the battlefield now.`,
+    `You can return to the battlefield now.`,
     { parse_mode: "HTML" }
   );
 }
