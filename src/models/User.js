@@ -9,9 +9,12 @@ const shadowSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     level: { type: String, required: true }, // LOW | MID | TOP | LEGEND | ULTRA
+    class: { type: String, enum: ["MINER", "GUARD", "BUILDER"], default: "MINER" },
     power: { type: Number, default: 0 },
     stars: { type: Number, default: 0 },
-    imagePath: { type: String, default: null }
+    imagePath: { type: String, default: null },
+    scamUses: { type: Number, default: 0 },
+    alive: { type: Boolean, default: true }
   },
   { _id: false }
 );
@@ -52,9 +55,18 @@ const userSchema = new mongoose.Schema(
     // ─── ECONOMY ─────────────────────────────────────
     balance: { type: Number, default: 1000 },  // 🌙 Moons Coins (legacy - use moons)
     moons: { type: Number, default: 1000 },    // 🌙 Moons Coins (main currency)
+    rp: { type: Number, default: 1000 },
+    estateStarted: { type: Boolean, default: false },
+    rpRank: { type: String, default: "Novice Digger" },
+    workerMorale: { type: Number, default: 100 },
+    lastCollectedAt: { type: Number, default: () => Math.floor(Date.now() / 1000) },
+    inventory: { type: [String], default: [] },
     lastLootAt: { type: Number, default: 0 },
     immuneUntil: { type: Number, default: 0 },
     immuneCooldownUntil: { type: Number, default: 0 },
+    javierProtectionUntil: { type: Number, default: 0 },
+    javierCooldownUntil: { type: Number, default: 0 },
+    lastScamAt: { type: Number, default: 0 },
     stars: { type: Number, default: 0 },       // Optional legacy/global stars
 
     // ─── SHADOW SYSTEM (CRITICAL) ─────────────────────
@@ -67,6 +79,16 @@ const userSchema = new mongoose.Schema(
     trainingWins: { type: Number, default: 0 },
     trainingLosses: { type: Number, default: 0 },
     lastTrainAt: { type: Number, default: 0 },
+    bonusGamesPlayed: { type: Number, default: 0 },
+    bonusWins: { type: Number, default: 0 },
+    bonusLosses: { type: Number, default: 0 },
+    bonusEliminations: { type: Number, default: 0 },
+    totalRpStolen: { type: Number, default: 0 },
+    tacticStats: {
+      aggressive: { type: Number, default: 0 },
+      defensive: { type: Number, default: 0 },
+      deceptive: { type: Number, default: 0 }
+    },
 
     // ─── COMBAT (FUTURE PVP) ──────────────────────────
     successfulAttacks: { type: Number, default: 0 },

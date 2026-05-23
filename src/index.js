@@ -34,6 +34,7 @@ import { helpCommand } from "./commands/help.js";
 import { mikasaCommand } from "./commands/mikasa.js";
 import { expeditionCommand } from "./commands/expedition.js";
 import { loveCommand } from "./commands/love.js";
+import { estateCommand } from "./commands/estate.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -96,6 +97,7 @@ async function start() {
 
   // Register commands
   startCommand(bot);
+  estateCommand(bot);
   wishCommand(bot);
   gambleCommand(bot);
   topperCommand(bot);
