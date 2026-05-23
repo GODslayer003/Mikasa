@@ -25,6 +25,7 @@ const RANKS = [
 
 const WORKER_RP = { LOW: 2, MID: 5, TOP: 12, LEGEND: 25, ULTRA: 50 };
 const WORKER_POWER = { LOW: 10, MID: 20, TOP: 40, LEGEND: 70, ULTRA: 100 };
+const TIER_ORDER = { LOW: 1, MID: 2, TOP: 3, LEGEND: 4, ULTRA: 5 };
 const TACTIC_BEATS = {
   aggressive: "deceptive",
   defensive: "aggressive",
@@ -85,12 +86,23 @@ function workerClass(level) {
   return "MINER";
 }
 
+function tierLabel(level) {
+  return LEVELS[level]?.label || level || "Unknown Tier";
+}
+
+function tierStars(level) {
+  const stars = Math.max(1, Math.min(5, LEVELS[level]?.stars || TIER_ORDER[level] || 1));
+  return "★".repeat(stars) + "☆".repeat(5 - stars);
+}
+
 function normalizeWorkers(user) {
   if (!Array.isArray(user.shadows)) user.shadows = [];
   for (const worker of user.shadows) {
     if (!worker.class) worker.class = workerClass(worker.level);
     if (typeof worker.scamUses !== "number") worker.scamUses = 0;
     if (typeof worker.alive !== "boolean") worker.alive = true;
+    const imagePath = resolveWorkerImage(worker);
+    if (imagePath) worker.imagePath = imagePath;
   }
   return user.shadows;
 }
@@ -160,6 +172,94 @@ function randomWorkerImage(levelKey) {
   if (!files.length) return null;
   const file = files[Math.floor(Math.random() * files.length)];
   return path.join(folder, file);
+}
+
+function assetFolderForLevel(level) {
+  const folderName = LEVELS[level]?.folder;
+  if (!folderName) return null;
+  return path.join(__dirname, "..", "..", "assets", folderName);
+}
+
+function findWorkerAssetByName(level, name) {
+  const folder = assetFolderForLevel(level);
+  if (!folder || !fs.existsSync(folder)) return null;
+
+  const wanted = path.parse(String(name || "")).name.toLowerCase();
+  if (!wanted) return null;
+  const files = fs.readdirSync(folder).filter((file) => /\.(png|jpg|jpeg)$/i.test(file));
+  if (!files.length) return null;
+
+  const exact = files.find((file) => path.parse(file).name.toLowerCase() === wanted);
+  const fuzzy = files.find((file) => path.parse(file).name.toLowerCase().includes(wanted));
+  const file = exact || fuzzy;
+  return file ? path.join(folder, file) : null;
+}
+
+function legacyPathBaseName(value = "") {
+  const fileName = String(value).split(/[\\/]/).pop() || "";
+  return path.parse(fileName).name;
+}
+
+function resolveWorkerImage(worker) {
+  if (worker?.imagePath && fs.existsSync(worker.imagePath)) return worker.imagePath;
+
+  const fromName = findWorkerAssetByName(worker?.level, worker?.name);
+  if (fromName) return fromName;
+
+  if (worker?.imagePath) {
+    const legacyName = legacyPathBaseName(worker.imagePath);
+    const fromLegacyPath = findWorkerAssetByName(worker?.level, legacyName);
+    if (fromLegacyPath) return fromLegacyPath;
+  }
+
+  return null;
+}
+
+function workerCardCaption(worker, index, total) {
+  const rate = WORKER_RP[worker.level] || 0;
+  const power = WORKER_POWER[worker.level] || worker.power || 0;
+
+  return (
+    `<b>Frontera Labour Dossier</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `<b>${escapeHtml(worker.name || "Unnamed Labourer")}</b>\n` +
+    `Tier: <b>${tierLabel(worker.level)}</b> ${tierStars(worker.level)}\n` +
+    `Class: <b>${worker.class || workerClass(worker.level)}</b>\n` +
+    `Base Clash Power: <b>${power}</b>\n` +
+    `Passive Income: <b>${rate} RP/hr</b>\n` +
+    `Scam Deployments: <b>${worker.scamUses || 0}</b>\n` +
+    `Status: <b>${worker.alive === false ? "Unavailable" : "Ready"}</b>\n\n` +
+    `Dossier: <b>${index + 1}/${total}</b>\n\n` +
+    `<i>Lloyd: "A labourer is not an expense. A labourer is future profit with boots."</i>`
+  );
+}
+
+async function sendWorkerCard(ctx, worker, index, total, keyboard, replyId) {
+  const caption = workerCardCaption(worker, index, total);
+  const imagePath = resolveWorkerImage(worker);
+
+  if (imagePath) {
+    worker.imagePath = imagePath;
+    try {
+      return await ctx.replyWithPhoto(
+        { source: imagePath },
+        {
+          caption,
+          parse_mode: "HTML",
+          reply_to_message_id: replyId,
+          ...(keyboard || {})
+        }
+      );
+    } catch (err) {
+      console.error("Worker card photo error:", err);
+    }
+  }
+
+  return ctx.reply(`${caption}\n\n<i>Image unavailable; dossier recovered without portrait.</i>`, {
+    parse_mode: "HTML",
+    reply_to_message_id: replyId,
+    ...(keyboard || {})
+  });
 }
 
 function tacticLabel(tactic) {
@@ -438,7 +538,13 @@ export function estateCommand(bot) {
     });
   });
 
-  bot.command(["arisers", "shadow"], async (ctx) => {
+  bot.command("arisers", async (ctx) => {
+    return ctx.reply("The old /arisers command has been renamed. Use /labours for the estate leaderboard.", {
+      reply_to_message_id: ctx.message?.message_id
+    });
+  });
+
+  bot.command("shadow", async (ctx) => {
     return ctx.reply("The old shadow roster is now the estate workforce. Use /workers.", {
       reply_to_message_id: ctx.message?.message_id
     });
@@ -449,19 +555,34 @@ export function estateCommand(bot) {
     const workers = normalizeWorkers(user);
     const counts = workerBreakdown(workers);
     const games = (user.bonusWins || 0) + (user.bonusLosses || 0);
+    const production = workers
+      .filter((worker) => worker.alive !== false)
+      .reduce((sum, worker) => sum + (WORKER_RP[worker.level] || 0), 0);
+    const nextRank = [...RANKS].reverse().find(([, required]) => required > getRp(user));
+    const nextRankText = nextRank
+      ? `${nextRank[0]} at ${nextRank[1].toLocaleString()} RP`
+      : "Estate ceiling reached";
     await user.save();
 
     return ctx.reply(
-      `<b>Frontera Estate Profile</b>\n\n` +
+      `<b>Frontera Estate Ledger</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `<b>Owner</b>\n` +
         `Name: ${mention(ctx.from.id, ctx.from.first_name)}\n` +
-        `Username: ${ctx.from.username ? `@${escapeHtml(ctx.from.username)}` : "Not set"}\n` +
+        `Username: ${ctx.from.username ? `@${escapeHtml(ctx.from.username)}` : "Not set"}\n\n` +
+        `<b>Wealth & Rank</b>\n` +
         `RP Balance: <b>${getRp(user).toLocaleString()} RP</b>\n` +
         `Rank Tier: <b>${rankForRp(getRp(user))}</b>\n` +
+        `Next Promotion: <b>${nextRankText}</b>\n` +
         `HP: <b>${Math.max(0, user.hp || MAX_HP)}/100</b>\n\n` +
-        `Workers: <b>${workers.length}</b>\n` +
-        `MINER: ${counts.MINER} | GUARD: ${counts.GUARD} | BUILDER: ${counts.BUILDER}\n\n` +
-        `Game Stats: ${user.bonusWins || 0} wins, ${user.bonusLosses || 0} losses, ${games} played\n\n` +
-        `<i>Lloyd: "A good estate begins with a brutally honest balance sheet."</i>`,
+        `<b>Labour Force</b>\n` +
+        `Total Labourers: <b>${workers.length}</b>\n` +
+        `Miners: <b>${counts.MINER}</b> | Guards: <b>${counts.GUARD}</b> | Builders: <b>${counts.BUILDER}</b>\n` +
+        `Passive Production: <b>${production} RP/hr</b>\n` +
+        `Morale: <b>${user.workerMorale ?? 100}/100</b>\n\n` +
+        `<b>Frontera Bonus Record</b>\n` +
+        `Wins: <b>${user.bonusWins || 0}</b> | Losses: <b>${user.bonusLosses || 0}</b> | Played: <b>${games}</b>\n\n` +
+        `<i>Lloyd: "A good estate begins with a brutally honest balance sheet. Mostly brutal."</i>`,
       { parse_mode: "HTML", reply_to_message_id: ctx.message?.message_id }
     );
   });
@@ -516,6 +637,49 @@ export function estateCommand(bot) {
         `Total RP Stolen: <b>${(user.totalRpStolen || 0).toLocaleString()} RP</b>\n` +
         `Favorite Tactic: <b>${favoriteTactic(user)}</b>\n\n` +
         `<b>Server Top 5</b>\n${board}`,
+      { parse_mode: "HTML", reply_to_message_id: ctx.message?.message_id }
+    );
+  });
+
+  bot.command("labours", async (ctx) => {
+    const caller = await ensureEstateUser(ctx.from);
+    const topUsers = await User.find({
+      shadows: { $exists: true, $ne: [] },
+      totalStars: { $gt: 0 }
+    })
+      .sort({ totalStars: -1, totalPower: -1, rp: -1 })
+      .limit(10);
+
+    const callerWorkers = normalizeWorkers(caller);
+    const callerProduction = callerWorkers
+      .filter((worker) => worker.alive !== false)
+      .reduce((sum, worker) => sum + (WORKER_RP[worker.level] || 0), 0);
+
+    const rows = topUsers.length
+      ? topUsers.map((user, index) => {
+          const workers = normalizeWorkers(user);
+          const production = workers
+            .filter((worker) => worker.alive !== false)
+            .reduce((sum, worker) => sum + (WORKER_RP[worker.level] || 0), 0);
+          const name = user.telegramId === ctx.from.id
+            ? mention(user.telegramId, user.firstName || ctx.from.first_name)
+            : `<b>${escapeHtml(user.firstName || "Unnamed Baron")}</b>`;
+          return `${index + 1}. ${name}\n   Labourers: <b>${workers.length}</b> | Stars: <b>${user.totalStars || 0}</b> | Output: <b>${production} RP/hr</b>`;
+        }).join("\n\n")
+      : "No labour forces have been registered yet.";
+
+    await caller.save();
+
+    return ctx.reply(
+      `<b>Frontera Labour Rankings</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `<i>Ranked by total worker stars, power, and estate value.</i>\n\n` +
+        `${rows}\n\n` +
+        `<b>Your Workforce</b>\n` +
+        `Labourers: <b>${callerWorkers.length}</b>\n` +
+        `Total Stars: <b>${caller.totalStars || 0}</b>\n` +
+        `Production: <b>${callerProduction} RP/hr</b>\n\n` +
+        `<i>Lloyd: "A leaderboard is just a public invoice for everyone's inadequacy."</i>`,
       { parse_mode: "HTML", reply_to_message_id: ctx.message?.message_id }
     );
   });
@@ -591,20 +755,36 @@ export function estateCommand(bot) {
     user.lastAriseAt = now;
     await user.save();
 
-    return ctx.replyWithPhoto(
-      { source: imagePath },
-      {
-        caption:
-          `<b>Worker Contract Signed</b>\n\n` +
-          `Name: <b>${escapeHtml(worker.name)}</b>\n` +
-          `Tier: <b>${LEVELS[levelKey].label}</b>\n` +
-          `Class: <b>${worker.class}</b>\n` +
-          `Passive RP: <b>${WORKER_RP[levelKey]} RP/hr</b>\n\n` +
-          `<i>Lloyd: "Water is good. Cheap labor is also good."</i>`,
+    const caption =
+      `<b>LABOUR CONTRACT SIGNED</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `<b>${escapeHtml(worker.name)}</b>\n` +
+      `Tier: <b>${tierLabel(levelKey)}</b> ${tierStars(levelKey)}\n` +
+      `Class: <b>${worker.class}</b>\n` +
+      `Base Clash Power: <b>${WORKER_POWER[levelKey]}</b>\n` +
+      `Passive Income: <b>${WORKER_RP[levelKey]} RP/hr</b>\n\n` +
+      `<b>Estate Summary</b>\n` +
+      `Labourers: <b>${user.shadows.length}</b>\n` +
+      `Total Power: <b>${user.totalPower}</b>\n` +
+      `Total Stars: <b>${user.totalStars}</b>\n\n` +
+      `<i>Lloyd: "Water is good. Labour is good. Labour that pays for itself is divine."</i>`;
+
+    try {
+      return await ctx.replyWithPhoto(
+        { source: imagePath },
+        {
+          caption,
+          parse_mode: "HTML",
+          reply_to_message_id: ctx.message?.message_id
+        }
+      );
+    } catch (err) {
+      console.error("Worker summon photo error:", err);
+      return ctx.reply(`${caption}\n\n<i>Portrait failed to load, but the contract is legally binding.</i>`, {
         parse_mode: "HTML",
         reply_to_message_id: ctx.message?.message_id
-      }
-    );
+      });
+    }
   });
 
   bot.command("workers", async (ctx) => {
@@ -615,19 +795,17 @@ export function estateCommand(bot) {
     const id = `${ctx.from.id}:${Date.now().toString(36)}`;
     gallerySessions.set(id, { userId: ctx.from.id, index: 0 });
     const worker = workers[0];
-    return ctx.replyWithPhoto(
-      { source: worker.imagePath },
-      {
-        caption:
-          `<b>${escapeHtml(worker.name)}</b>\n\nTier: ${worker.level}\nClass: ${worker.class}\nPassive RP/hr: ${WORKER_RP[worker.level] || 0}\nUsed in scam battle: ${worker.scamUses || 0} times\n\n1/${workers.length}`,
-        parse_mode: "HTML",
-        reply_to_message_id: ctx.message?.message_id,
-        ...Markup.inlineKeyboard([
-          Markup.button.callback("<", `workers:prev:${id}`),
-          Markup.button.callback("Explore", `workers:all:${id}`),
-          Markup.button.callback(">", `workers:next:${id}`)
-        ])
-      }
+    return sendWorkerCard(
+      ctx,
+      worker,
+      0,
+      workers.length,
+      Markup.inlineKeyboard([
+        Markup.button.callback("<", `workers:prev:${id}`),
+        Markup.button.callback("Explore", `workers:all:${id}`),
+        Markup.button.callback(">", `workers:next:${id}`)
+      ]),
+      ctx.message?.message_id
     );
   });
 
@@ -803,22 +981,52 @@ export function estateCommand(bot) {
     const workers = normalizeWorkers(user);
     if (action === "all") {
       await ctx.answerCbQuery("Exploring.");
-      const text = workers.map((w, i) => `${i + 1}. ${w.name} - ${w.level}/${w.class} - ${WORKER_RP[w.level] || 0} RP/hr`).join("\n");
-      return ctx.reply(`<b>Estate Workforce</b>\n\n${escapeHtml(text)}`, { parse_mode: "HTML" });
+      const text = workers.map((w, i) => {
+        const status = w.alive === false ? "Unavailable" : "Ready";
+        return `${i + 1}. ${w.name} - ${tierLabel(w.level)} / ${w.class} - ${WORKER_RP[w.level] || 0} RP/hr - ${status}`;
+      }).join("\n");
+      return ctx.reply(
+        `<b>Estate Labour Manifest</b>\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `<code>${escapeHtml(text)}</code>\n\n` +
+          `<i>Lloyd: "Every name here is either profit or future profit. Preferably both."</i>`,
+        { parse_mode: "HTML" }
+      );
     }
     session.index = action === "next"
       ? (session.index + 1) % workers.length
       : (session.index - 1 + workers.length) % workers.length;
     const worker = workers[session.index];
     await ctx.answerCbQuery();
-    return ctx.editMessageMedia(
-      { type: "photo", media: { source: worker.imagePath }, caption: `<b>${escapeHtml(worker.name)}</b>\n\nTier: ${worker.level}\nClass: ${worker.class}\nPassive RP/hr: ${WORKER_RP[worker.level] || 0}\nUsed in scam battle: ${worker.scamUses || 0} times\n\n${session.index + 1}/${workers.length}`, parse_mode: "HTML" },
-      Markup.inlineKeyboard([
+    const keyboard = Markup.inlineKeyboard([
         Markup.button.callback("<", `workers:prev:${id}`),
         Markup.button.callback("Explore", `workers:all:${id}`),
         Markup.button.callback(">", `workers:next:${id}`)
-      ])
-    );
+      ]);
+    const imagePath = resolveWorkerImage(worker);
+
+    if (!imagePath) {
+      return ctx.reply(`${workerCardCaption(worker, session.index, workers.length)}\n\n<i>Image unavailable; dossier recovered without portrait.</i>`, {
+        parse_mode: "HTML",
+        ...keyboard
+      });
+    }
+
+    worker.imagePath = imagePath;
+    try {
+      return await ctx.editMessageMedia(
+        {
+          type: "photo",
+          media: { source: imagePath },
+          caption: workerCardCaption(worker, session.index, workers.length),
+          parse_mode: "HTML"
+        },
+        keyboard
+      );
+    } catch (err) {
+      console.error("Worker gallery edit error:", err);
+      return sendWorkerCard(ctx, worker, session.index, workers.length, keyboard);
+    }
   });
 
   bot.action(/^scam:aw:([^:]+):(\d+)$/, async (ctx) => {

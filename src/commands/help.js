@@ -21,6 +21,7 @@ export function helpCommand(bot) {
 <b>Workers & Shop</b>
 • /worker - Hire a random worker.
 • /workers - Browse your workforce.
+• /labours - View the estate labour leaderboard.
 • /shop - Buy estate items with RP.
 
 <b>Group Game</b>
