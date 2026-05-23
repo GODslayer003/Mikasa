@@ -1,6 +1,8 @@
 // ─── ENV ───────────────────────────────────
 import "dotenv/config";
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 
 // ─── BOT ───────────────────────────────────
 import { bot } from "./bot.js";
@@ -36,6 +38,8 @@ import { expeditionCommand } from "./commands/expedition.js";
 import { loveCommand } from "./commands/love.js";
 import { estateCommand } from "./commands/estate.js";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function isTelegramConflict(err) {
@@ -70,6 +74,13 @@ async function start() {
   // 🔥 Start health check server IMMEDIATELY for Render
   const app = express();
   const port = process.env.PORT || 3000;
+  app.use(
+    "/assets",
+    express.static(path.join(__dirname, "..", "assets"), {
+      immutable: true,
+      maxAge: "30d"
+    })
+  );
   app.get("/", (req, res) => res.send("Bot is running 🚀"));
   app.listen(port, () => {
     console.log(`Server running on port ${port}`);

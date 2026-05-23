@@ -9,10 +9,10 @@ const shadowSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     level: { type: String, required: true }, // LOW | MID | TOP | LEGEND | ULTRA
-    class: { type: String, enum: ["MINER", "GUARD", "BUILDER"], default: "MINER" },
     power: { type: Number, default: 0 },
     stars: { type: Number, default: 0 },
     imagePath: { type: String, default: null },
+    telegramFileId: { type: String, default: null },
     scamUses: { type: Number, default: 0 },
     alive: { type: Boolean, default: true }
   },

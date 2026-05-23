@@ -32,6 +32,7 @@ const RANKS = [
 const WORKER_RP = { LOW: 2, MID: 5, TOP: 12, LEGEND: 25, ULTRA: 50 };
 const WORKER_POWER = { LOW: 10, MID: 20, TOP: 40, LEGEND: 70, ULTRA: 100 };
 const TIER_ORDER = { LOW: 1, MID: 2, TOP: 3, LEGEND: 4, ULTRA: 5 };
+const TIER_BALLS = { LOW: "⚪", MID: "🟢", TOP: "🔵", LEGEND: "🟣", ULTRA: "🔴" };
 const TACTIC_BEATS = {
   aggressive: "deceptive",
   defensive: "aggressive",
@@ -86,12 +87,6 @@ function rankForRp(rp) {
   return RANKS.find(([, required]) => rp >= required)?.[0] || "Novice Digger";
 }
 
-function workerClass(level) {
-  if (level === "TOP") return "GUARD";
-  if (level === "LEGEND" || level === "ULTRA") return "BUILDER";
-  return "MINER";
-}
-
 function tierLabel(level) {
   return LEVELS[level]?.label || level || "Unknown Tier";
 }
@@ -101,10 +96,13 @@ function tierStars(level) {
   return "★".repeat(stars) + "☆".repeat(5 - stars);
 }
 
+function tierBall(level) {
+  return TIER_BALLS[level] || "⚫";
+}
+
 function normalizeWorkers(user) {
   if (!Array.isArray(user.shadows)) user.shadows = [];
   for (const worker of user.shadows) {
-    if (!worker.class) worker.class = workerClass(worker.level);
     if (typeof worker.scamUses !== "number") worker.scamUses = 0;
     if (typeof worker.alive !== "boolean") worker.alive = true;
     const imagePath = resolveWorkerImage(worker);
@@ -146,10 +144,11 @@ async function ensureEstateUser(telegramUser) {
   return user;
 }
 
-function workerBreakdown(workers) {
-  const counts = { MINER: 0, GUARD: 0, BUILDER: 0 };
-  for (const worker of workers) counts[worker.class || workerClass(worker.level)]++;
-  return counts;
+function tierBreakdown(workers) {
+  return Object.keys(LEVELS).reduce((counts, level) => {
+    counts[level] = workers.filter((worker) => worker.level === level).length;
+    return counts;
+  }, {});
 }
 
 function topWorkers(user, limit = 3) {
@@ -221,6 +220,28 @@ function resolveWorkerImage(worker) {
   return null;
 }
 
+function publicBaseUrl() {
+  const raw = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL;
+  return raw ? raw.replace(/\/+$/, "") : null;
+}
+
+function publicAssetUrl(worker) {
+  const imagePath = resolveWorkerImage(worker);
+  const baseUrl = publicBaseUrl();
+  if (!imagePath || !baseUrl) return null;
+
+  const assetsRoot = path.join(__dirname, "..", "..", "assets");
+  const relative = path.relative(assetsRoot, imagePath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
+
+  const encodedPath = relative
+    .split(path.sep)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+
+  return `${baseUrl}/assets/${encodedPath}`;
+}
+
 function workerCardCaption(worker, index, total) {
   const rate = WORKER_RP[worker.level] || 0;
   const power = WORKER_POWER[worker.level] || worker.power || 0;
@@ -229,8 +250,7 @@ function workerCardCaption(worker, index, total) {
     `<b>Frontera Labour Dossier</b>\n` +
     `━━━━━━━━━━━━━━━━━━━━\n\n` +
     `<b>${escapeHtml(worker.name || "Unnamed Labourer")}</b>\n` +
-    `Tier: <b>${tierLabel(worker.level)}</b> ${tierStars(worker.level)}\n` +
-    `Class: <b>${worker.class || workerClass(worker.level)}</b>\n` +
+    `Tier: ${tierBall(worker.level)} <b>${tierLabel(worker.level)}</b> ${tierStars(worker.level)}\n` +
     `Base Clash Power: <b>${power}</b>\n` +
     `Passive Income: <b>${rate} RP/hr</b>\n` +
     `Scam Deployments: <b>${worker.scamUses || 0}</b>\n` +
@@ -246,8 +266,7 @@ function workerContractCaption(worker, user) {
     `<b>LABOUR CONTRACT SIGNED</b>\n` +
     `━━━━━━━━━━━━━━━━━━━━\n\n` +
     `<b>${escapeHtml(worker.name)}</b>\n` +
-    `Tier: <b>${tierLabel(level)}</b> ${tierStars(level)}\n` +
-    `Class: <b>${worker.class || workerClass(level)}</b>\n` +
+    `Tier: ${tierBall(level)} <b>${tierLabel(level)}</b> ${tierStars(level)}\n` +
     `Base Clash Power: <b>${WORKER_POWER[level] || worker.power || 0}</b>\n` +
     `Passive Income: <b>${WORKER_RP[level] || 0} RP/hr</b>\n\n` +
     `<b>Estate Summary</b>\n` +
@@ -319,6 +338,39 @@ function workerExploreKeyboard(sessionId, page, totalPages, visibleWorkers) {
   if (page < totalPages - 1) nav.push(Markup.button.callback("Next", `workers:page:${sessionId}:${page + 1}`));
 
   return Markup.inlineKeyboard([...numberRows, nav]);
+}
+
+function inlineWorkerResults(user, workers) {
+  return workers.slice(0, 50).map((worker, index) => {
+    const caption = workerContractCaption(worker, user);
+    const description = `${tierBall(worker.level)} ${tierLabel(worker.level)} | ${WORKER_RP[worker.level] || 0} RP/hr`;
+
+    if (worker.telegramFileId) {
+      return {
+        type: "photo",
+        id: `worker-cache-${index}`,
+        photo_file_id: worker.telegramFileId,
+        title: worker.name || "Labourer",
+        description,
+        caption,
+        parse_mode: "HTML"
+      };
+    }
+
+    const photoUrl = publicAssetUrl(worker);
+    if (!photoUrl) return null;
+
+    return {
+      type: "photo",
+      id: `worker-url-${index}`,
+      photo_url: photoUrl,
+      thumbnail_url: photoUrl,
+      title: worker.name || "Labourer",
+      description,
+      caption,
+      parse_mode: "HTML"
+    };
+  }).filter(Boolean);
 }
 
 async function createWorkerCollage(userId, sessionId, workers, page) {
@@ -686,7 +738,7 @@ export function estateCommand(bot) {
   bot.command("rank", async (ctx) => {
     const user = await ensureEstateUser(ctx.from);
     const workers = normalizeWorkers(user);
-    const counts = workerBreakdown(workers);
+    const counts = tierBreakdown(workers);
     const games = (user.bonusWins || 0) + (user.bonusLosses || 0);
     const production = workers
       .filter((worker) => worker.alive !== false)
@@ -710,7 +762,8 @@ export function estateCommand(bot) {
         `HP: <b>${Math.max(0, user.hp || MAX_HP)}/100</b>\n\n` +
         `<b>Labour Force</b>\n` +
         `Total Labourers: <b>${workers.length}</b>\n` +
-        `Miners: <b>${counts.MINER}</b> | Guards: <b>${counts.GUARD}</b> | Builders: <b>${counts.BUILDER}</b>\n` +
+        `${tierBall("LOW")} Low: <b>${counts.LOW}</b> | ${tierBall("MID")} Mid: <b>${counts.MID}</b> | ${tierBall("TOP")} Top: <b>${counts.TOP}</b>\n` +
+        `${tierBall("LEGEND")} Legend: <b>${counts.LEGEND}</b> | ${tierBall("ULTRA")} Ultra: <b>${counts.ULTRA}</b>\n` +
         `Passive Production: <b>${production} RP/hr</b>\n` +
         `Morale: <b>${user.workerMorale ?? 100}/100</b>\n\n` +
         `<b>Frontera Bonus Record</b>\n` +
@@ -875,7 +928,6 @@ export function estateCommand(bot) {
     const worker = {
       name: path.parse(imagePath).name,
       level: levelKey,
-      class: workerClass(levelKey),
       power: LEVELS[levelKey].power,
       stars: LEVELS[levelKey].stars,
       imagePath,
@@ -883,6 +935,7 @@ export function estateCommand(bot) {
       alive: true
     };
     user.shadows.push(worker);
+    const workerIndex = user.shadows.length - 1;
     user.totalStars = (user.totalStars || 0) + worker.stars;
     user.totalPower = (user.totalPower || 0) + worker.power;
     user.lastAriseAt = now;
@@ -891,7 +944,7 @@ export function estateCommand(bot) {
     const caption = workerContractCaption(worker, user);
 
     try {
-      return await ctx.replyWithPhoto(
+      const sent = await ctx.replyWithPhoto(
         { source: imagePath },
         {
           caption,
@@ -899,6 +952,12 @@ export function estateCommand(bot) {
           reply_to_message_id: ctx.message?.message_id
         }
       );
+      const fileId = sent?.photo?.at(-1)?.file_id;
+      if (fileId) {
+        user.shadows[workerIndex].telegramFileId = fileId;
+        await user.save();
+      }
+      return sent;
     } catch (err) {
       console.error("Worker summon photo error:", err);
       return ctx.reply(`${caption}\n\n<i>Portrait failed to load, but the contract is legally binding.</i>`, {
@@ -921,12 +980,15 @@ export function estateCommand(bot) {
         `━━━━━━━━━━━━━━━━━━━━\n\n` +
         `Labourers Registered: <b>${workers.length}</b>\n` +
         `Unique Contracts: <b>${new Set(workers.map((worker) => `${worker.level}:${worker.name}`)).size}</b>\n\n` +
-        `Press <b>Explore</b> to open your portrait sheet. Select a number under the sheet to inspect that labourer's contract.\n\n` +
+        `Press <b>Explore</b> to open your worker portraits in Telegram's inline picker. Tap a portrait to send its full contract card.\n\n` +
         `<i>Lloyd: "Do not stare for free. Every portrait is an asset."</i>`,
       {
         parse_mode: "HTML",
         reply_to_message_id: ctx.message?.message_id,
-        ...Markup.inlineKeyboard([Markup.button.callback("Explore", `workers:explore:${id}`)])
+        ...Markup.inlineKeyboard([
+          Markup.button.switchToCurrentChat("Explore", `workers ${ctx.from.id}`),
+          Markup.button.callback("Backup Sheet", `workers:explore:${id}`)
+        ])
       }
     );
   });
@@ -1071,6 +1133,57 @@ export function estateCommand(bot) {
 
   bot.command(["timeplus", "timeminus"], async (ctx) => {
     return ctx.reply("Lobby timer controls are acknowledged. Use /fstart when 3+ players are ready.", { reply_to_message_id: ctx.message?.message_id });
+  });
+
+  bot.on("inline_query", async (ctx) => {
+    const query = (ctx.inlineQuery?.query || "").trim();
+    if (!/^workers\b/i.test(query)) return;
+
+    const requestedUserId = Number(query.split(/\s+/)[1] || ctx.from.id);
+    if (requestedUserId !== ctx.from.id) {
+      return ctx.answerInlineQuery(
+        [
+          {
+            type: "article",
+            id: "private-workers",
+            title: "This labour archive is private",
+            description: "Use /workers from your own account to inspect your estate.",
+            input_message_content: {
+              message_text: "Lloyd refuses to leak another baron's labour contracts. Use /workers yourself."
+            }
+          }
+        ],
+        { cache_time: 1, is_personal: true }
+      );
+    }
+
+    const user = await ensureEstateUser(ctx.from);
+    const workers = normalizeWorkers(user);
+    await user.save();
+
+    const results = inlineWorkerResults(user, workers);
+    if (!results.length) {
+      return ctx.answerInlineQuery(
+        [
+          {
+            type: "article",
+            id: "no-worker-images",
+            title: "No public worker portraits ready",
+            description: "Use Backup Sheet from /workers, or summon a new /worker to cache a Telegram portrait.",
+            input_message_content: {
+              message_text:
+                "No inline portraits are ready yet. Use /workers -> Backup Sheet, or summon a new /worker so Telegram can cache the portrait."
+            }
+          }
+        ],
+        { cache_time: 1, is_personal: true }
+      );
+    }
+
+    return ctx.answerInlineQuery(results, {
+      cache_time: 5,
+      is_personal: true
+    });
   });
 
   bot.action(/^shop:(.+)$/, async (ctx) => {
