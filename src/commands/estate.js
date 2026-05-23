@@ -1,7 +1,9 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Markup } from "telegraf";
+import { Jimp } from "jimp";
 import { User } from "../models/User.js";
 import { LEVELS } from "../game/levels.js";
 import { hasMinMembers } from "../utils/group.js";
@@ -14,6 +16,10 @@ const MAX_HP = 100;
 const WORKER_COOLDOWN = 30 * 60;
 const SCAM_COOLDOWN = 5 * 60;
 const BONUS_ENTRY_FEE = 100;
+const WORKER_EXPLORE_PAGE_SIZE = 20;
+const WORKER_EXPLORE_COLUMNS = 5;
+const WORKER_THUMB_SIZE = 170;
+const WORKER_THUMB_GAP = 8;
 
 const RANKS = [
   ["Frontera Baron", 50000],
@@ -234,6 +240,24 @@ function workerCardCaption(worker, index, total) {
   );
 }
 
+function workerContractCaption(worker, user) {
+  const level = worker.level;
+  return (
+    `<b>LABOUR CONTRACT SIGNED</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `<b>${escapeHtml(worker.name)}</b>\n` +
+    `Tier: <b>${tierLabel(level)}</b> ${tierStars(level)}\n` +
+    `Class: <b>${worker.class || workerClass(level)}</b>\n` +
+    `Base Clash Power: <b>${WORKER_POWER[level] || worker.power || 0}</b>\n` +
+    `Passive Income: <b>${WORKER_RP[level] || 0} RP/hr</b>\n\n` +
+    `<b>Estate Summary</b>\n` +
+    `Labourers: <b>${user.shadows?.length || 0}</b>\n` +
+    `Total Power: <b>${user.totalPower || 0}</b>\n` +
+    `Total Stars: <b>${user.totalStars || 0}</b>\n\n` +
+    `<i>Lloyd: "Water is good. Labour is good. Labour that pays for itself is divine."</i>`
+  );
+}
+
 async function sendWorkerCard(ctx, worker, index, total, keyboard, replyId) {
   const caption = workerCardCaption(worker, index, total);
   const imagePath = resolveWorkerImage(worker);
@@ -260,6 +284,115 @@ async function sendWorkerCard(ctx, worker, index, total, keyboard, replyId) {
     reply_to_message_id: replyId,
     ...(keyboard || {})
   });
+}
+
+function workerExploreCaption(user, page, totalPages, visibleWorkers) {
+  const total = user.shadows?.length || 0;
+  const unique = new Set((user.shadows || []).map((worker) => `${worker.level}:${worker.name}`)).size;
+  const pageStart = page * WORKER_EXPLORE_PAGE_SIZE + 1;
+  const pageEnd = pageStart + visibleWorkers.length - 1;
+
+  return (
+    `<b>${escapeHtml(user.firstName || "Baron")}'s Labour Roster</b>\n` +
+    `Page <b>${page + 1}/${totalPages}</b> | Showing <b>${pageStart}-${pageEnd}</b>\n\n` +
+    `Labour size: <b>${total}</b> (${unique} unique).\n` +
+    `Tap a number below to inspect the matching portrait.\n\n` +
+    `<i>Lloyd: "A gallery is just inventory management with prettier faces."</i>`
+  );
+}
+
+function workerExploreKeyboard(sessionId, page, totalPages, visibleWorkers) {
+  const startIndex = page * WORKER_EXPLORE_PAGE_SIZE;
+  const numberRows = [];
+
+  for (let i = 0; i < visibleWorkers.length; i += WORKER_EXPLORE_COLUMNS) {
+    const row = visibleWorkers.slice(i, i + WORKER_EXPLORE_COLUMNS).map((worker, offset) => {
+      const absoluteIndex = startIndex + i + offset;
+      return Markup.button.callback(String(absoluteIndex + 1), `workers:view:${sessionId}:${absoluteIndex}`);
+    });
+    numberRows.push(row);
+  }
+
+  const nav = [];
+  if (page > 0) nav.push(Markup.button.callback("Prev", `workers:page:${sessionId}:${page - 1}`));
+  nav.push(Markup.button.callback("Close", `workers:close:${sessionId}`));
+  if (page < totalPages - 1) nav.push(Markup.button.callback("Next", `workers:page:${sessionId}:${page + 1}`));
+
+  return Markup.inlineKeyboard([...numberRows, nav]);
+}
+
+async function createWorkerCollage(userId, sessionId, workers, page) {
+  const visibleWorkers = workers.slice(
+    page * WORKER_EXPLORE_PAGE_SIZE,
+    page * WORKER_EXPLORE_PAGE_SIZE + WORKER_EXPLORE_PAGE_SIZE
+  );
+  const rows = Math.max(1, Math.ceil(visibleWorkers.length / WORKER_EXPLORE_COLUMNS));
+  const width = WORKER_EXPLORE_COLUMNS * WORKER_THUMB_SIZE + (WORKER_EXPLORE_COLUMNS + 1) * WORKER_THUMB_GAP;
+  const height = rows * WORKER_THUMB_SIZE + (rows + 1) * WORKER_THUMB_GAP;
+  const canvas = new Jimp({ width, height, color: 0xd8cfabff });
+
+  await Promise.all(visibleWorkers.map(async (worker, localIndex) => {
+    const col = localIndex % WORKER_EXPLORE_COLUMNS;
+    const row = Math.floor(localIndex / WORKER_EXPLORE_COLUMNS);
+    const x = WORKER_THUMB_GAP + col * (WORKER_THUMB_SIZE + WORKER_THUMB_GAP);
+    const y = WORKER_THUMB_GAP + row * (WORKER_THUMB_SIZE + WORKER_THUMB_GAP);
+    const imagePath = resolveWorkerImage(worker);
+
+    try {
+      const image = imagePath
+        ? await Jimp.read(imagePath)
+        : new Jimp({ width: WORKER_THUMB_SIZE, height: WORKER_THUMB_SIZE, color: 0x6d6551ff });
+      image.cover({ w: WORKER_THUMB_SIZE, h: WORKER_THUMB_SIZE });
+      canvas.composite(image, x, y);
+    } catch (err) {
+      console.error("Worker collage tile error:", err);
+      const placeholder = new Jimp({ width: WORKER_THUMB_SIZE, height: WORKER_THUMB_SIZE, color: 0x6d6551ff });
+      canvas.composite(placeholder, x, y);
+    }
+  }));
+
+  const outputDir = path.join(os.tmpdir(), "monster-bot-workers");
+  fs.mkdirSync(outputDir, { recursive: true });
+  const outputPath = path.join(outputDir, `${userId}-${sessionId}-p${page}.png`);
+  await canvas.write(outputPath);
+  return { outputPath, visibleWorkers };
+}
+
+async function sendWorkerExplore(ctx, user, sessionId, page, edit = false) {
+  const workers = normalizeWorkers(user);
+  const totalPages = Math.max(1, Math.ceil(workers.length / WORKER_EXPLORE_PAGE_SIZE));
+  const safePage = Math.min(Math.max(0, page), totalPages - 1);
+  const session = gallerySessions.get(sessionId);
+  if (session) session.page = safePage;
+
+  const { outputPath, visibleWorkers } = await createWorkerCollage(user.telegramId, sessionId, workers, safePage);
+  const caption = workerExploreCaption(user, safePage, totalPages, visibleWorkers);
+  const keyboard = workerExploreKeyboard(sessionId, safePage, totalPages, visibleWorkers);
+
+  if (edit) {
+    try {
+      return await ctx.editMessageMedia(
+        {
+          type: "photo",
+          media: { source: outputPath },
+          caption,
+          parse_mode: "HTML"
+        },
+        keyboard
+      );
+    } catch (err) {
+      console.error("Worker explore edit error:", err);
+    }
+  }
+
+  return ctx.replyWithPhoto(
+    { source: outputPath },
+    {
+      caption,
+      parse_mode: "HTML",
+      ...keyboard
+    }
+  );
 }
 
 function tacticLabel(tactic) {
@@ -755,19 +888,7 @@ export function estateCommand(bot) {
     user.lastAriseAt = now;
     await user.save();
 
-    const caption =
-      `<b>LABOUR CONTRACT SIGNED</b>\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `<b>${escapeHtml(worker.name)}</b>\n` +
-      `Tier: <b>${tierLabel(levelKey)}</b> ${tierStars(levelKey)}\n` +
-      `Class: <b>${worker.class}</b>\n` +
-      `Base Clash Power: <b>${WORKER_POWER[levelKey]}</b>\n` +
-      `Passive Income: <b>${WORKER_RP[levelKey]} RP/hr</b>\n\n` +
-      `<b>Estate Summary</b>\n` +
-      `Labourers: <b>${user.shadows.length}</b>\n` +
-      `Total Power: <b>${user.totalPower}</b>\n` +
-      `Total Stars: <b>${user.totalStars}</b>\n\n` +
-      `<i>Lloyd: "Water is good. Labour is good. Labour that pays for itself is divine."</i>`;
+    const caption = workerContractCaption(worker, user);
 
     try {
       return await ctx.replyWithPhoto(
@@ -793,19 +914,20 @@ export function estateCommand(bot) {
     await user.save();
     if (!workers.length) return ctx.reply("You have no workers, Baron. Use /worker to summon your first one.", { reply_to_message_id: ctx.message?.message_id });
     const id = `${ctx.from.id}:${Date.now().toString(36)}`;
-    gallerySessions.set(id, { userId: ctx.from.id, index: 0 });
-    const worker = workers[0];
-    return sendWorkerCard(
-      ctx,
-      worker,
-      0,
-      workers.length,
-      Markup.inlineKeyboard([
-        Markup.button.callback("<", `workers:prev:${id}`),
-        Markup.button.callback("Explore", `workers:all:${id}`),
-        Markup.button.callback(">", `workers:next:${id}`)
-      ]),
-      ctx.message?.message_id
+    gallerySessions.set(id, { userId: ctx.from.id, page: 0 });
+
+    return ctx.reply(
+      `<b>Frontera Labour Archive</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `Labourers Registered: <b>${workers.length}</b>\n` +
+        `Unique Contracts: <b>${new Set(workers.map((worker) => `${worker.level}:${worker.name}`)).size}</b>\n\n` +
+        `Press <b>Explore</b> to open your portrait sheet. Select a number under the sheet to inspect that labourer's contract.\n\n` +
+        `<i>Lloyd: "Do not stare for free. Every portrait is an asset."</i>`,
+      {
+        parse_mode: "HTML",
+        reply_to_message_id: ctx.message?.message_id,
+        ...Markup.inlineKeyboard([Markup.button.callback("Explore", `workers:explore:${id}`)])
+      }
     );
   });
 
@@ -972,41 +1094,47 @@ export function estateCommand(bot) {
     return ctx.reply(`Smart investment. Lloyd would be proud.\n\nPurchased: ${name}`);
   });
 
-  bot.action(/^workers:(prev|next|all):(.+)$/, async (ctx) => {
-    const action = ctx.match[1];
-    const id = ctx.match[2];
+  bot.action(/^workers:explore:(.+)$/, async (ctx) => {
+    const id = ctx.match[1];
     const session = gallerySessions.get(id);
     if (!session || session.userId !== ctx.from.id) return ctx.answerCbQuery("This gallery expired.");
     const user = await ensureEstateUser(ctx.from);
     const workers = normalizeWorkers(user);
-    if (action === "all") {
-      await ctx.answerCbQuery("Exploring.");
-      const text = workers.map((w, i) => {
-        const status = w.alive === false ? "Unavailable" : "Ready";
-        return `${i + 1}. ${w.name} - ${tierLabel(w.level)} / ${w.class} - ${WORKER_RP[w.level] || 0} RP/hr - ${status}`;
-      }).join("\n");
-      return ctx.reply(
-        `<b>Estate Labour Manifest</b>\n` +
-          `━━━━━━━━━━━━━━━━━━━━\n\n` +
-          `<code>${escapeHtml(text)}</code>\n\n` +
-          `<i>Lloyd: "Every name here is either profit or future profit. Preferably both."</i>`,
-        { parse_mode: "HTML" }
-      );
-    }
-    session.index = action === "next"
-      ? (session.index + 1) % workers.length
-      : (session.index - 1 + workers.length) % workers.length;
-    const worker = workers[session.index];
-    await ctx.answerCbQuery();
+    if (!workers.length) return ctx.answerCbQuery("No labourers found.", { show_alert: true });
+    await ctx.answerCbQuery("Opening archive.");
+    return sendWorkerExplore(ctx, user, id, 0);
+  });
+
+  bot.action(/^workers:page:(.+):(\d+)$/, async (ctx) => {
+    const id = ctx.match[1];
+    const page = Number(ctx.match[2]);
+    const session = gallerySessions.get(id);
+    if (!session || session.userId !== ctx.from.id) return ctx.answerCbQuery("This gallery expired.");
+    const user = await ensureEstateUser(ctx.from);
+    await ctx.answerCbQuery(`Page ${page + 1}`);
+    return sendWorkerExplore(ctx, user, id, page, true);
+  });
+
+  bot.action(/^workers:view:(.+):(\d+)$/, async (ctx) => {
+    const id = ctx.match[1];
+    const index = Number(ctx.match[2]);
+    const session = gallerySessions.get(id);
+    if (!session || session.userId !== ctx.from.id) return ctx.answerCbQuery("This gallery expired.");
+    const user = await ensureEstateUser(ctx.from);
+    const workers = normalizeWorkers(user);
+    const worker = workers[index];
+    if (!worker) return ctx.answerCbQuery("Labourer not found.", { show_alert: true });
+
+    await ctx.answerCbQuery(worker.name || "Labour dossier");
     const keyboard = Markup.inlineKeyboard([
-        Markup.button.callback("<", `workers:prev:${id}`),
-        Markup.button.callback("Explore", `workers:all:${id}`),
-        Markup.button.callback(">", `workers:next:${id}`)
-      ]);
+      Markup.button.callback("Back to Explore", `workers:page:${id}:${session.page || 0}`),
+      Markup.button.callback("Close", `workers:close:${id}`)
+    ]);
     const imagePath = resolveWorkerImage(worker);
+    const caption = workerContractCaption(worker, user);
 
     if (!imagePath) {
-      return ctx.reply(`${workerCardCaption(worker, session.index, workers.length)}\n\n<i>Image unavailable; dossier recovered without portrait.</i>`, {
+      return ctx.reply(`${caption}\n\n<i>Image unavailable; contract details recovered from the ledger.</i>`, {
         parse_mode: "HTML",
         ...keyboard
       });
@@ -1018,15 +1146,31 @@ export function estateCommand(bot) {
         {
           type: "photo",
           media: { source: imagePath },
-          caption: workerCardCaption(worker, session.index, workers.length),
+          caption,
           parse_mode: "HTML"
         },
         keyboard
       );
     } catch (err) {
-      console.error("Worker gallery edit error:", err);
-      return sendWorkerCard(ctx, worker, session.index, workers.length, keyboard);
+      console.error("Worker view edit error:", err);
+      return ctx.replyWithPhoto(
+        { source: imagePath },
+        {
+          caption,
+          parse_mode: "HTML",
+          ...keyboard
+        }
+      );
     }
+  });
+
+  bot.action(/^workers:close:(.+)$/, async (ctx) => {
+    const id = ctx.match[1];
+    const session = gallerySessions.get(id);
+    if (!session || session.userId !== ctx.from.id) return ctx.answerCbQuery("This gallery expired.");
+    gallerySessions.delete(id);
+    await ctx.answerCbQuery("Closed.");
+    return ctx.editMessageCaption("Labour archive closed. Lloyd has returned the portraits to the vault.").catch(() => ctx.deleteMessage().catch(() => {}));
   });
 
   bot.action(/^scam:aw:([^:]+):(\d+)$/, async (ctx) => {
