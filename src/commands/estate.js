@@ -7,6 +7,7 @@ import { Jimp } from "jimp";
 import { User } from "../models/User.js";
 import { LEVELS } from "../game/levels.js";
 import { hasMinMembers } from "../utils/group.js";
+import { initLloydAssets, getRandomLloydImage, getCachedFileId, setCachedFileId, getLloydQuote, buildHpBar } from "../services/lloydAssets.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -562,70 +563,238 @@ async function resolveScam(ctx, session, reason = "") {
 
 async function runBonusRound(bot, session) {
   if (session.finished) return;
+  
   const alive = session.players.filter((player) => player.alive);
   if (alive.length <= 1) return finishBonus(bot, session, alive[0] || null, "sudden");
   if (session.round > 5) return finishBonus(bot, session, null, "score");
 
   session.choices = new Map();
   const isLullaby = session.round === 3;
-  const prompt = isLullaby
-    ? `<b>Round 3: Lloyd's Concert</b>\n\nChoose fast. Mercy is not in the budget.`
-    : `<b>Round ${session.round}: Frontera Bonus</b>\n\nShare, embezzle, or snitch. Lloyd is watching the math.`;
 
-  await bot.telegram.sendMessage(session.chatId, prompt, { parse_mode: "HTML" });
+  // Send round announcement to group
+  const roundAnnouncement = isLullaby
+    ? `🎵 <b>Phase ${session.round}: Lloyd's Concert</b>\n\nChoose fast. Mercy is not in the budget.`
+    : `🏗️ <b>Phase ${session.round}: Frontera Bonus</b>\n\n<i>"Don't tell me what's ethical. Tell me what's profitable."</i>`;
 
+  await bot.telegram.sendMessage(session.chatId, roundAnnouncement, { parse_mode: "HTML" });
+
+  // Send DM work orders to each alive player with 15s timer
   for (const player of alive) {
-    const buttons = isLullaby
-      ? [
-          Markup.button.callback("Buy Earplugs", `bonus:choice:${session.id}:earplugs`),
-          Markup.button.callback("Endure", `bonus:choice:${session.id}:endure`),
-          Markup.button.callback("Push", `bonus:choice:${session.id}:push`)
-        ]
-      : [
-          Markup.button.callback("Share", `bonus:choice:${session.id}:share`),
-          Markup.button.callback("Embezzle", `bonus:choice:${session.id}:embezzle`),
-          Markup.button.callback("Snitch", `bonus:choice:${session.id}:snitch`)
-        ];
     try {
-      await bot.telegram.sendMessage(player.id, prompt, Markup.inlineKeyboard(buttons, { columns: 1 }));
-    } catch {
-      await bot.telegram.sendMessage(session.chatId, `${mention(player.id, player.name)} start me in DM first. I need to whisper your secret moves.`, { parse_mode: "HTML" });
+      const dmCaption = buildRoundDmCaption(player, session, isLullaby);
+      const buttons = isLullaby
+        ? [
+            Markup.button.callback("🛡️ Earplugs", `bonus:choice:${session.id}:earplugs`),
+            Markup.button.callback("😤 Endure", `bonus:choice:${session.id}:endure`),
+            Markup.button.callback("💢 Push", `bonus:choice:${session.id}:push`)
+          ]
+        : [
+            Markup.button.callback("⚖️ Share", `bonus:choice:${session.id}:share`),
+            Markup.button.callback("🪙 Embezzle", `bonus:choice:${session.id}:embezzle`),
+            Markup.button.callback("📢 Snitch", `bonus:choice:${session.id}:snitch`)
+          ];
+
+      const lloydImage = getRandomLloydImage();
+      let dmMsg = null;
+
+      if (lloydImage) {
+        const cachedFileId = getCachedFileId(lloydImage);
+        try {
+          if (cachedFileId) {
+            dmMsg = await bot.telegram.sendPhoto(player.id, cachedFileId, {
+              caption: dmCaption,
+              parse_mode: "HTML",
+              ...Markup.inlineKeyboard(buttons, { columns: 1 })
+            });
+          } else {
+            dmMsg = await bot.telegram.sendPhoto(player.id, { source: lloydImage }, {
+              caption: dmCaption,
+              parse_mode: "HTML",
+              ...Markup.inlineKeyboard(buttons, { columns: 1 })
+            });
+            if (dmMsg.photo?.length > 0) {
+              setCachedFileId(lloydImage, dmMsg.photo[dmMsg.photo.length - 1].file_id);
+            }
+          }
+          session.roundDmIds.set(player.id, dmMsg.message_id);
+        } catch (photoErr) {
+          // Fall back to text-only
+          dmMsg = await bot.telegram.sendMessage(player.id, dmCaption, {
+            parse_mode: "HTML",
+            ...Markup.inlineKeyboard(buttons, { columns: 1 })
+          });
+          session.roundDmIds.set(player.id, dmMsg.message_id);
+        }
+      } else {
+        dmMsg = await bot.telegram.sendMessage(player.id, dmCaption, {
+          parse_mode: "HTML",
+          ...Markup.inlineKeyboard(buttons, { columns: 1 })
+        });
+        session.roundDmIds.set(player.id, dmMsg.message_id);
+      }
+    } catch (err) {
+      // DM error - notify group, apply default choice silently
+      await bot.telegram.sendMessage(
+        session.chatId,
+        `📭 <b>${escapeHtml(player.name)}</b> didn't open their work order. Default choice applied.`,
+        { parse_mode: "HTML" }
+      );
+      const defaultChoice = isLullaby ? "endure" : "share";
+      session.choices.set(player.id, defaultChoice);
     }
+
+    // Add 100ms delay between DM sends to avoid Telegram rate limits
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  setTimeout(() => settleBonusRound(bot, session.id), 15 * 1000);
+  // Lloyd mid-round quote at 7.5s
+  setTimeout(async () => {
+    try {
+      const lloydImage = getRandomLloydImage();
+      if (lloydImage) {
+        const cachedFileId = getCachedFileId(lloydImage);
+        const quote = getLloydQuote();
+        const caption = `<i>"${quote}"</i>\n\n— Lloyd Frontera\nFrontera County Development Bureau`;
+        try {
+          if (cachedFileId) {
+            await bot.telegram.sendPhoto(session.chatId, cachedFileId, { caption, parse_mode: "HTML" });
+          } else {
+            const msg = await bot.telegram.sendPhoto(session.chatId, { source: lloydImage }, { caption, parse_mode: "HTML" });
+            if (msg.photo?.length > 0) {
+              setCachedFileId(lloydImage, msg.photo[msg.photo.length - 1].file_id);
+            }
+          }
+        } catch (err) {
+          // Silently fail
+        }
+      }
+    } catch (err) {
+      // Silently fail
+    }
+  }, 7500);
+
+  // Settle after 15s
+  setTimeout(() => settleBonusRound(bot, bot.telegram, session.id), 15 * 1000);
 }
 
-async function settleBonusRound(bot, sessionId) {
+async function settleBonusRound(bot, telegram, sessionId) {
   const session = bonusSessions.get(sessionId);
   if (!session || session.finished) return;
 
   const alive = session.players.filter((player) => player.alive);
   const isLullaby = session.round === 3;
-  const lines = [`<b>Round ${session.round} Results</b>`];
 
+  // Sleep function helper
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Step 0 (0s): Send Lloyd photo (no text)
+  await sleep(0);
+  try {
+    const lloydImage = getRandomLloydImage();
+    if (lloydImage) {
+      const cachedFileId = getCachedFileId(lloydImage);
+      try {
+        if (cachedFileId) {
+          await telegram.sendPhoto(session.chatId, cachedFileId);
+        } else {
+          const msg = await telegram.sendPhoto(session.chatId, { source: lloydImage });
+          if (msg.photo?.length > 0) {
+            setCachedFileId(lloydImage, msg.photo[msg.photo.length - 1].file_id);
+          }
+        }
+      } catch (err) {
+        // Silently fail
+      }
+    }
+  } catch (err) {
+    // Silently fail
+  }
+
+  // Step 1 (5s): Send CHOICES message
+  await sleep(5000);
+  const choicesLines = [`📋 <b>Phase ${session.round} — Work Orders Revealed</b>`];
+  const sortedAlive = [...alive].sort((a, b) => a.name.localeCompare(b.name));
+  for (const player of sortedAlive) {
+    const choice = session.choices.get(player.id) || (isLullaby ? "endure" : "share");
+    const label = getChoiceLabel(choice);
+    const emoji = getChoiceEmoji(choice);
+    const isDefault = !session.choices.has(player.id);
+    const suffix = isDefault ? " <i>(default)</i>" : "";
+    choicesLines.push(`${emoji} <b>${escapeHtml(player.name)}</b> → ${label}${suffix}`);
+  }
+  try {
+    await telegram.sendMessage(session.chatId, choicesLines.join("\n"), { parse_mode: "HTML" });
+  } catch (err) {
+    // Silently fail
+  }
+
+  // Step 2 (10s): Send OUTCOME message
+  await sleep(5000);
+  const outcomeMsg = buildOutcomeMessage(session, alive, isLullaby);
+  try {
+    await telegram.sendMessage(session.chatId, outcomeMsg, { parse_mode: "HTML" });
+  } catch (err) {
+    // Silently fail
+  }
+
+  // Step 3 (17s): Send STANDINGS
+  await sleep(7000);
+  const standingsMsg = buildStandingsMessage(session, alive);
+  try {
+    await telegram.sendMessage(session.chatId, standingsMsg, { parse_mode: "HTML" });
+  } catch (err) {
+    // Silently fail
+  }
+
+  // Step 4 (25s): Send countdown message with live edits
+  await sleep(8000);
+  let countdownMsg = null;
+  try {
+    countdownMsg = await telegram.sendMessage(
+      session.chatId,
+      `🏗️ <b>Phase ${session.round + 1} begins in 5...</b>`,
+      { parse_mode: "HTML" }
+    );
+  } catch (err) {
+    // Silently fail
+  }
+
+  // Edit countdown 4, 3, 2, 1
+  for (let i = 4; i >= 1; i--) {
+    await sleep(1000);
+    if (countdownMsg) {
+      try {
+        await telegram.editMessageText(
+          session.chatId,
+          countdownMsg.message_id,
+          undefined,
+          `🏗️ <b>Phase ${session.round + 1} begins in ${i}...</b>`,
+          { parse_mode: "HTML" }
+        );
+      } catch (err) {
+        // Silently fail
+      }
+    }
+  }
+
+  // Apply damage/stash changes for this round
   if (isLullaby) {
     for (const player of alive) {
       const choice = session.choices.get(player.id) || "endure";
       if (choice === "earplugs") {
         player.stash = Math.max(0, player.stash - 300);
-        lines.push(`${mention(player.id, player.name)} bought earplugs. -300 RP, no damage.`);
       } else if (choice === "push") {
         const targets = alive.filter((p) => p.id !== player.id && p.alive);
         const target = targets[Math.floor(Math.random() * targets.length)];
         if (!target) {
           player.hp -= 50;
-          lines.push(`${mention(player.id, player.name)} tried to push nobody and endured the concert.`);
         } else if ((session.choices.get(target.id) || "endure") === "earplugs") {
           player.hp = 0;
-          lines.push(`${mention(player.id, player.name)} pushed ${mention(target.id, target.name)}. Earplugs reflected the disaster.`);
         } else {
           target.hp = 0;
-          lines.push(`${mention(player.id, player.name)} pushed ${mention(target.id, target.name)} into the front row.`);
         }
       } else {
         player.hp -= 50;
-        lines.push(`${mention(player.id, player.name)} endured Lloyd's voice. -50 HP.`);
       }
     }
   } else {
@@ -636,22 +805,17 @@ async function settleBonusRound(bot, sessionId) {
     if (!embezzlers.length && !snitches.length) {
       const share = Math.floor(1000 / alive.length);
       alive.forEach((player) => (player.stash += share));
-      lines.push(`Everyone shared. Each survivor gains ${share} RP.`);
     } else if (embezzlers.length === 1 && !snitches.length) {
       embezzlers[0].player.stash += 1000;
-      lines.push(`${mention(embezzlers[0].player.id, embezzlers[0].player.name)} embezzled the full 1000 RP.`);
     } else if (embezzlers.length > 1 && !snitches.length) {
       embezzlers.forEach(({ player }) => (player.hp -= 30));
-      lines.push(`Multiple embezzlers collided. Each takes -30 HP.`);
     } else if (embezzlers.length && snitches.length) {
       embezzlers.forEach(({ player }) => (player.hp -= 60));
       snitches.forEach(({ player }) => (player.stash += 500));
-      lines.push(`Snitches caught the theft. Embezzlers take -60 HP; snitches gain 500 RP.`);
-    } else {
-      lines.push(`Snitches found no crime. Lloyd writes "dramatic, unprofitable" in the margin.`);
     }
   }
 
+  // Handle eliminations and notify group
   for (const player of alive) {
     if (player.hp <= 0 && player.alive) {
       player.alive = false;
@@ -660,13 +824,32 @@ async function settleBonusRound(bot, sessionId) {
         user.bonusEliminations = (user.bonusEliminations || 0) + 1;
         await user.save();
       }
-      lines.push(`${mention(player.id, player.name)} has been fired.`);
+
+      // Send elimination drama
+      const eliminationMsg = buildEliminationMessage(player);
+      try {
+        await telegram.sendMessage(session.chatId, eliminationMsg, { parse_mode: "HTML" });
+      } catch (err) {
+        // Silently fail
+      }
+
+      // DM to eliminated player
+      try {
+        await telegram.sendMessage(
+          player.id,
+          `🔨 <b>You've been fired</b> from Lloyd's work site, ${escapeHtml(player.name)}.\nYour stash of ${player.stash} RP has been forfeited.\n\n<i>Javier sends his condolences. The hamster does not.</i>`,
+          { parse_mode: "HTML" }
+        );
+      } catch (err) {
+        // Silently fail
+      }
     }
   }
 
-  await bot.telegram.sendMessage(session.chatId, lines.join("\n"), { parse_mode: "HTML" });
+  // Step 5 (30s): Call next round
+  await sleep(5000);
   session.round += 1;
-  setTimeout(() => runBonusRound(bot, session), 4000);
+  runBonusRound(bot, session);
 }
 
 async function finishBonus(bot, session, suddenWinner, mode) {
@@ -680,27 +863,345 @@ async function finishBonus(bot, session, suddenWinner, mode) {
     winner = [...survivors].sort((a, b) => b.stash - a.stash)[0];
   }
 
+  const lloydImage = getRandomLloydImage();
+  let gameEndCaption = "";
+
   if (!winner) {
-    await bot.telegram.sendMessage(session.chatId, `<b>Total Wipe</b>\n\nLloyd keeps the money. "This is why I handle my own finances."`, { parse_mode: "HTML" });
+    gameEndCaption = buildTotalWipeMessage(session);
   } else {
-    const payout = winner.stash + session.prizePot;
-    const user = await User.findOne({ telegramId: winner.id });
-    if (user) {
-      setRp(user, getRp(user) + payout);
-      user.bonusWins = (user.bonusWins || 0) + 1;
-      await user.save();
-    }
-    await bot.telegram.sendMessage(session.chatId, `<b>Frontera Bonus Winner</b>\n\n${mention(winner.id, winner.name)} wins <b>${payout.toLocaleString()} RP</b>.\n\n<i>Lloyd: "Water is good. Profit is better. Today, you are both."</i>`, { parse_mode: "HTML" });
+    gameEndCaption = buildWinnerMessage(session, winner);
   }
 
+  // Send game end message with photo
+  try {
+    if (lloydImage) {
+      const cachedFileId = getCachedFileId(lloydImage);
+      try {
+        if (cachedFileId) {
+          await bot.telegram.sendPhoto(session.chatId, cachedFileId, { caption: gameEndCaption, parse_mode: "HTML" });
+        } else {
+          const msg = await bot.telegram.sendPhoto(session.chatId, { source: lloydImage }, { caption: gameEndCaption, parse_mode: "HTML" });
+          if (msg.photo?.length > 0) {
+            setCachedFileId(lloydImage, msg.photo[msg.photo.length - 1].file_id);
+          }
+        }
+      } catch (err) {
+        // Fall back to text-only
+        await bot.telegram.sendMessage(session.chatId, gameEndCaption, { parse_mode: "HTML" });
+      }
+    } else {
+      await bot.telegram.sendMessage(session.chatId, gameEndCaption, { parse_mode: "HTML" });
+    }
+  } catch (err) {
+    console.error("Error sending game end message:", err.message);
+  }
+
+  // Update database for all players
   for (const player of session.players) {
     const user = await User.findOne({ telegramId: player.id });
     if (!user) continue;
+    
     user.bonusGamesPlayed = (user.bonusGamesPlayed || 0) + 1;
-    if (!winner || player.id !== winner.id) user.bonusLosses = (user.bonusLosses || 0) + 1;
-    if (player.alive && player.stash > 0) setRp(user, getRp(user) + player.stash);
+    if (!winner || player.id !== winner.id) {
+      user.bonusLosses = (user.bonusLosses || 0) + 1;
+    }
+    
+    // Award stash to survivors
+    if (player.alive && player.stash > 0) {
+      setRp(user, getRp(user) + player.stash);
+    }
+    
+    // Award payout to winner
+    if (winner && player.id === winner.id) {
+      const payout = winner.stash + session.prizePot;
+      setRp(user, getRp(user) + payout);
+      user.bonusWins = (user.bonusWins || 0) + 1;
+    }
+    
     await user.save();
   }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BONUS MESSAGE BUILDERS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+function buildIntroCaption() {
+  return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏗️ LLOYD'S BONUS CONSTRUCTION TENDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"This is a perfectly legal business arrangement.
+Probably. I haven't checked."
+— Lloyd Frontera, Frontera County Development Bureau
+
+📋 PROJECT BRIEF
+┌──────────────────────────────┐
+│ 💰 Bid Fee:    100 RP per player │
+│ 👷 Workers:   3–8 players         │
+│ 🏗️ Phases:    5 rounds max         │
+│ 🏆 Payout:    Winner takes pot     │
+└──────────────────────────────┘
+
+⚙️ HOW THE TENDER WORKS
+Each phase, Lloyd sends you a private work order.
+Pick your strategy — but remember, others are bidding too.
+
+⚖️ SHARE THE CONTRACT
+   Split 1000 RP equally with all workers. Safe profit.
+
+🪙 EMBEZZLE THE FUNDS
+   Pocket 1000 RP. Only works if YOU'RE the only thief.
+   Multiple embezzlers? You all take -30 HP. Classic greed.
+
+📢 SNITCH TO THE INSPECTOR
+   Report embezzlers. Earn 500 RP per thief caught.
+   No crime? No reward. Pick your moment.
+
+⚠️ PHASE 3 — THE LULLABY CONCERT
+(Lloyd accidentally booked a magic singer)
+   🎵 ENDURE  — Take -50 HP. Suffer through it.
+   🛡️ EARPLUGS — Pay 300 RP. Stay shielded.
+   💢 PUSH    — Shove someone. Risky if they're shielded.
+
+❤️ HP = Your job security. Hit 0 = you're fired.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏳ Lobby closes in: 60s
+👷 Workers on site: 0 / 8
+💰 Prize pot: 0 RP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+}
+
+function buildLobbyCaption(session, timeLeft) {
+  const playersList = session.players.map((p) => `   👷 ${escapeHtml(p.name)}`).join("\n");
+  const playerSection = playersList ? `\n✅ ON SITE:\n${playersList}` : "";
+  
+  return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏗️ LLOYD'S BONUS CONSTRUCTION TENDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"This is a perfectly legal business arrangement.
+Probably. I haven't checked."
+— Lloyd Frontera, Frontera County Development Bureau
+
+📋 PROJECT BRIEF
+┌──────────────────────────────┐
+│ 💰 Bid Fee:    100 RP per player │
+│ 👷 Workers:   3–8 players         │
+│ 🏗️ Phases:    5 rounds max         │
+│ 🏆 Payout:    Winner takes pot     │
+└──────────────────────────────┘
+
+⚙️ HOW THE TENDER WORKS
+Each phase, Lloyd sends you a private work order.
+Pick your strategy — but remember, others are bidding too.
+
+⚖️ SHARE THE CONTRACT
+   Split 1000 RP equally with all workers. Safe profit.
+
+🪙 EMBEZZLE THE FUNDS
+   Pocket 1000 RP. Only works if YOU'RE the only thief.
+   Multiple embezzlers? You all take -30 HP. Classic greed.
+
+📢 SNITCH TO THE INSPECTOR
+   Report embezzlers. Earn 500 RP per thief caught.
+   No crime? No reward. Pick your moment.
+
+⚠️ PHASE 3 — THE LULLABY CONCERT
+(Lloyd accidentally booked a magic singer)
+   🎵 ENDURE  — Take -50 HP. Suffer through it.
+   🛡️ EARPLUGS — Pay 300 RP. Stay shielded.
+   💢 PUSH    — Shove someone. Risky if they're shielded.
+
+❤️ HP = Your job security. Hit 0 = you're fired.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏳ Lobby closes in: ${timeLeft}s
+👷 Workers on site: ${session.players.length} / 8
+💰 Prize pot: ${session.prizePot} RP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━${playerSection}`;
+}
+
+function buildRoundDmCaption(player, session, isLullaby) {
+  const aliveCount = session.players.filter((p) => p.alive).length;
+  const hpBar = buildHpBar(player.hp);
+  
+  if (isLullaby) {
+    return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎵 PHASE ${session.round} — THE LULLABY INCIDENT · ${escapeHtml(player.name)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"I accidentally hired a magical singer for the work site.
+This is entirely Javier's fault."
+
+📊 YOUR STATUS
+❤️ HP:    ${player.hp}/100  ${hpBar}
+💰 Stash: ${player.stash} RP
+
+🎵 THE SONG IS PLAYING...
+
+🛡️ BUY EARPLUGS — Pay 300 RP. Immune to being Pushed.
+😤 ENDURE — No cost. Take -50 HP. Suffer with dignity.
+💢 PUSH — Shove a random coworker.
+         If they have earplugs: YOU take -100 HP instead.
+         If no target exists: you take -50 HP.
+
+⏳ Decision expires in: 15s
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  } else {
+    return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏗️ PHASE ${session.round} WORK ORDER — ${escapeHtml(player.name)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"Don't tell me what's ethical. Tell me what's profitable."
+
+📊 YOUR STATUS
+❤️ HP:    ${player.hp}/100  ${hpBar}
+💰 Stash: ${player.stash} RP
+👷 Still working: ${aliveCount} players
+🏦 Current pot: ${session.prizePot} RP
+
+📋 CHOOSE YOUR STRATEGY
+
+⚖️ SHARE THE CONTRACT
+   Split 1000 RP equally. Boring, but reliable.
+
+🪙 EMBEZZLE THE FUNDS
+   Take 1000 RP alone. Bold move.
+   If others embezzle too: all lose -30 HP.
+
+📢 SNITCH
+   Catch a thief, earn 500 RP per head.
+   No thieves? You get nothing. Read the room.
+
+⏳ Work order expires in: 15s
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+  }
+}
+
+function buildChoiceConfirmation(playerName, choiceLabel, received, total) {
+  return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ WORK ORDER SUBMITTED, ${escapeHtml(playerName)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You filed: ${choiceLabel}
+
+<i>Lloyd is reviewing submissions...</i>
+📬 Received: ${received} / ${total} work orders
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+}
+
+function buildOutcomeMessage(session, alive, isLullaby) {
+  const lines = [`⚡ <b>PHASE ${session.round} OUTCOME</b>`];
+
+  if (isLullaby) {
+    // Lullaby outcomes are handled separately; just announce summary
+    lines.push("🎵 Lloyd's concert has concluded. Workers survived... or didn't.");
+  } else {
+    const choices = alive.map((player) => ({ player, choice: session.choices.get(player.id) || "share" }));
+    const embezzlers = choices.filter((item) => item.choice === "embezzle");
+    const snitches = choices.filter((item) => item.choice === "snitch");
+
+    if (!embezzlers.length && !snitches.length) {
+      const share = Math.floor(1000 / alive.length);
+      lines.push(`🤝 All workers shared — 1000 RP split equally. ${share} RP each.`);
+    } else if (embezzlers.length === 1 && !snitches.length) {
+      lines.push(`🪙 Solo embezzler! ${mention(embezzlers[0].player.id, embezzlers[0].player.name)} pockets 1000 RP.`);
+    } else if (embezzlers.length > 1 && !snitches.length) {
+      lines.push(`💥 ${embezzlers.length} embezzlers collided! All lose -30 HP.`);
+    } else if (embezzlers.length && snitches.length) {
+      lines.push(`📢 Inspectors caught ${embezzlers.length} thief/thieves!`);
+      lines.push(`   Snitches earn 500 RP each.`);
+    } else {
+      lines.push(`🙅 Snitches found nothing. No embezzlers today.`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function buildStandingsMessage(session, alive) {
+  const lines = [`📊 <b>SITE ROSTER — AFTER PHASE ${session.round}</b>`];
+  const sorted = [...session.players].sort((a, b) => b.stash - a.stash);
+  
+  sorted.forEach((player, index) => {
+    const status = player.alive ? "❤️" : "💀";
+    const hpBar = buildHpBar(player.hp);
+    lines.push(`${index + 1}. ${status} <b>${escapeHtml(player.name)}</b>\n   ❤️ ${player.hp}/100  ${hpBar} · 💰 ${player.stash} RP`);
+  });
+  
+  return lines.join("\n");
+}
+
+function buildEliminationMessage(player) {
+  const lines = [`🔨 <b>${escapeHtml(player.name)} HAS BEEN FIRED</b>`];
+  lines.push(`Turns out greed has a headcount limit.`);
+  lines.push(`<i>"HR has been notified. Well. I am HR. You're fired."</i>`);
+  lines.push(`— Lloyd Frontera`);
+  return lines.join("\n");
+}
+
+function buildWinnerMessage(session, winner) {
+  const payout = winner.stash + session.prizePot;
+  const lines = [
+    `🏆 <b>PROJECT COMPLETE — LLOYD'S VERDICT</b>`,
+    ``,
+    `One worker outlasted everyone else.`,
+    `Or at least outscammed them.`,
+    ``,
+    `👷 <b>${mention(winner.id, winner.name)}</b> wins the Frontera Tender!`,
+    ``,
+    `💰 <b>TOTAL PAYOUT: ${payout.toLocaleString()} RP</b>`,
+    `   ├ Personal stash:  ${winner.stash} RP`,
+    `   └ Prize pot:       ${session.prizePot} RP`,
+    ``,
+    `📊 FINAL ROSTER`
+  ];
+  
+  const sorted = [...session.players].sort((a, b) => b.stash - a.stash);
+  sorted.forEach((player, index) => {
+    const status = player.alive ? "✅" : "❌";
+    lines.push(`${index + 1}. ${status} ${escapeHtml(player.name)} — ${player.stash} RP`);
+  });
+  
+  lines.push(``);
+  lines.push(`<i>"I'd say I'm proud, but I'm mostly relieved.`);
+  lines.push(`Frontera County thanks you for your service."</i>`);
+  lines.push(`— Lloyd Frontera, Chief Development Officer`);
+  
+  return lines.join("\n");
+}
+
+function buildTotalWipeMessage(session) {
+  return `☠️ <b>COMPLETE PROJECT COLLAPSE</b>
+
+Every single worker has been fired.
+The ${session.prizePot} RP prize pot has been... reclaimed.
+(By Lloyd. Obviously.)
+
+<i>"I've never seen this level of collective incompetence.
+It's almost impressive. Almost."</i>
+— Lloyd Frontera`;
+}
+
+function getChoiceLabel(choice) {
+  const labels = {
+    share: "⚖️ Share",
+    embezzle: "🪙 Embezzle",
+    snitch: "📢 Snitch",
+    earplugs: "🛡️ Earplugs",
+    endure: "😤 Endure",
+    push: "💢 Push"
+  };
+  return labels[choice] || choice;
+}
+
+function getChoiceEmoji(choice) {
+  const emojis = {
+    share: "⚖️",
+    embezzle: "🪙",
+    snitch: "📢",
+    earplugs: "🛡️",
+    endure: "😤",
+    push: "💢"
+  };
+  return emojis[choice] || "📭";
 }
 
 export function estateCommand(bot) {
@@ -1170,31 +1671,107 @@ export function estateCommand(bot) {
       round: 1,
       choices: new Map(),
       finished: false,
-      timer: null
+      timer: null,
+      lobbyMessageId: null,
+      roundDmIds: new Map() // Map<playerId, messageId>
     };
     bonusSessions.set(id, session);
-    session.timer = setTimeout(() => {
-      if (session.players.length >= 3) runBonusRound(bot, session);
-      else {
-        bonusSessions.delete(id);
-        bot.telegram.sendMessage(session.chatId, "Lobby closed. Lloyd refuses to run a psychological finance disaster for fewer than 3 players.");
+
+    // Send intro image
+    const introCaption = buildIntroCaption();
+    let introMsg = null;
+
+    try {
+      const lloydImage = getRandomLloydImage();
+      if (lloydImage) {
+        const cachedFileId = getCachedFileId(lloydImage);
+        if (cachedFileId) {
+          introMsg = await ctx.replyWithPhoto(cachedFileId, {
+            caption: introCaption,
+            parse_mode: "HTML",
+            ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
+          });
+        } else {
+          introMsg = await ctx.replyWithPhoto({ source: lloydImage }, {
+            caption: introCaption,
+            parse_mode: "HTML",
+            ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
+          });
+          if (introMsg.photo?.length > 0) {
+            setCachedFileId(lloydImage, introMsg.photo[introMsg.photo.length - 1].file_id);
+          }
+        }
+        session.lobbyMessageId = introMsg.message_id;
+      } else {
+        introMsg = await ctx.reply(introCaption, {
+          parse_mode: "HTML",
+          ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
+        });
+        session.lobbyMessageId = introMsg.message_id;
       }
-    }, 60 * 1000);
-    return ctx.reply(
-      `<b>The Frontera Bonus</b>\n\nEntry fee: 100 RP\nPlayers: 0/8\nTimer: 60s`,
-      {
+    } catch (err) {
+      console.error("❌ Error sending bonus intro:", err.message);
+      introMsg = await ctx.reply(introCaption, {
         parse_mode: "HTML",
-        reply_to_message_id: ctx.message?.message_id,
         ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
+      });
+      session.lobbyMessageId = introMsg.message_id;
+    }
+
+    // Countdown edits
+    const countdownTimes = [60, 45, 30, 15, 10, 5, 4, 3, 2, 1];
+    let currentCountdownIndex = 0;
+
+    session.timer = setInterval(() => {
+      const timeLeft = countdownTimes[currentCountdownIndex];
+      if (timeLeft === undefined) {
+        clearInterval(session.timer);
+        if (session.players.length >= 3) runBonusRound(bot, session);
+        else {
+          bonusSessions.delete(id);
+          try {
+            bot.telegram.sendMessage(session.chatId, "🚫 <b>Lobby Closed</b>\n\nLloyd refuses to run a psychological finance disaster for fewer than 3 players.", { parse_mode: "HTML" });
+          } catch (err) {
+            console.error("Error sending lobby close message:", err.message);
+          }
+        }
+        return;
       }
-    );
+
+      // Auto-start if 8 players
+      if (session.players.length === 8) {
+        clearInterval(session.timer);
+        try {
+          bot.telegram.editMessageCaption(session.chatId, session.lobbyMessageId, undefined, buildLobbyCaption(session, timeLeft), {
+            parse_mode: "HTML",
+            ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
+          });
+        } catch (err) {
+          // Silently fail on edit errors
+        }
+        runBonusRound(bot, session);
+        return;
+      }
+
+      // Update lobby message
+      try {
+        bot.telegram.editMessageCaption(session.chatId, session.lobbyMessageId, undefined, buildLobbyCaption(session, timeLeft), {
+          parse_mode: "HTML",
+          ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
+        });
+      } catch (err) {
+        // Silently fail on edit errors (identical text, old messages, etc)
+      }
+
+      currentCountdownIndex++;
+    }, 1000);
   });
 
   bot.command("fstart", async (ctx) => {
     const session = [...bonusSessions.values()].find((item) => item.chatId === ctx.chat.id && !item.finished);
     if (!session) return ctx.reply("No active Frontera Bonus lobby.", { reply_to_message_id: ctx.message?.message_id });
     if (session.players.length < 3) return ctx.reply("Need at least 3 players.", { reply_to_message_id: ctx.message?.message_id });
-    clearTimeout(session.timer);
+    clearInterval(session.timer);
     return runBonusRound(bot, session);
   });
 
@@ -1433,20 +2010,26 @@ export function estateCommand(bot) {
     if (!session || session.finished) return ctx.answerCbQuery("Lobby closed.");
     if (session.players.some((player) => player.id === ctx.from.id)) return ctx.answerCbQuery("Already joined.");
     if (session.players.length >= 8) return ctx.answerCbQuery("Lobby full.", { show_alert: true });
+    
     const user = await ensureEstateUser(ctx.from);
     if (getRp(user) < BONUS_ENTRY_FEE) return ctx.answerCbQuery("Need 100 RP.", { show_alert: true });
+    
     setRp(user, getRp(user) - BONUS_ENTRY_FEE);
     await user.save();
     session.prizePot += BONUS_ENTRY_FEE;
     session.players.push({ id: ctx.from.id, name: ctx.from.first_name || "Worker", hp: 100, stash: 0, alive: true });
-    await ctx.answerCbQuery("Joined.");
-    return ctx.editMessageText(
-      `<b>The Frontera Bonus</b>\n\nEntry fee: 100 RP\nPlayers: ${session.players.length}/8\nPrize Pot: ${session.prizePot} RP`,
-      {
+    
+    await ctx.answerCbQuery("✅ Joined the tender!");
+    
+    // Update lobby message with new player count
+    try {
+      await ctx.editMessageCaption(buildLobbyCaption(session, 60), {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${session.id}`)])
-      }
-    );
+      });
+    } catch (err) {
+      // Silently fail on edit errors
+    }
   });
 
   bot.action(/^bonus:choice:([^:]+):(.+)$/, async (ctx) => {
@@ -1454,7 +2037,44 @@ export function estateCommand(bot) {
     if (!session || session.finished) return ctx.answerCbQuery("Game closed.");
     const player = session.players.find((item) => item.id === ctx.from.id && item.alive);
     if (!player) return ctx.answerCbQuery("You are not alive in this game.");
-    session.choices.set(ctx.from.id, ctx.match[2]);
-    await ctx.answerCbQuery("Choice locked.");
+    
+    // Lock choice (prevent re-submission)
+    if (session.choices.has(ctx.from.id)) return ctx.answerCbQuery("Choice already locked.", { show_alert: false });
+    
+    const choice = ctx.match[2];
+    session.choices.set(ctx.from.id, choice);
+    
+    await ctx.answerCbQuery("✅ Choice locked.");
+    
+    // Edit DM to show confirmation
+    const choiceLabel = getChoiceLabel(choice);
+    const aliveCount = session.players.filter(p => p.alive).length;
+    const receivedCount = session.choices.size;
+    
+    try {
+      await ctx.editMessageCaption(buildChoiceConfirmation(player.name, choiceLabel, receivedCount, aliveCount), {
+        parse_mode: "HTML"
+      });
+    } catch (err) {
+      // Silently fail
+    }
+    
+    // Send group update
+    try {
+      await bot.telegram.sendMessage(session.chatId, `📬 <b>${escapeHtml(player.name)}</b> submitted their work order. (${receivedCount}/${aliveCount} received)`, { parse_mode: "HTML" });
+    } catch (err) {
+      // Silently fail
+    }
+    
+    // Check if all players submitted
+    if (receivedCount === aliveCount) {
+      try {
+        await bot.telegram.sendMessage(session.chatId, "⚡ <b>All work orders received!</b> Lloyd is tallying results...", { parse_mode: "HTML" });
+      } catch (err) {
+        // Silently fail
+      }
+      // Immediately settle this round (skip remaining timer)
+      await settleBonusRound(bot, ctx.telegram, session.id);
+    }
   });
 }
