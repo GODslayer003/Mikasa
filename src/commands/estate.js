@@ -69,9 +69,10 @@ function formatTime(seconds) {
 }
 
 function getRp(user) {
+  // Prefer `balance` as the canonical stored amount since many flows update it.
+  if (typeof user.balance === "number") return Math.max(0, Math.floor(user.balance));
   if (typeof user.rp === "number") return Math.max(0, Math.floor(user.rp));
   if (typeof user.moons === "number") return Math.max(0, Math.floor(user.moons));
-  if (typeof user.balance === "number") return Math.max(0, Math.floor(user.balance));
   return STARTING_RP;
 }
 
@@ -173,6 +174,16 @@ function randomWorkerImage(levelKey) {
   const folder = path.join(__dirname, "..", "..", "assets", LEVELS[levelKey].folder);
   const files = fs.existsSync(folder)
     ? fs.readdirSync(folder).filter((file) => /\.(png|jpg|jpeg)$/i.test(file))
+    : [];
+  if (!files.length) return null;
+  const file = files[Math.floor(Math.random() * files.length)];
+  return path.join(folder, file);
+}
+
+function randomLloydImage() {
+  const folder = path.join(__dirname, "..", "..", "assets", "Lloyd");
+  const files = fs.existsSync(folder)
+    ? fs.readdirSync(folder).filter((file) => /\.(png|jpg|jpeg|gif)$/i.test(file))
     : [];
   if (!files.length) return null;
   const file = files[Math.floor(Math.random() * files.length)];
@@ -504,6 +515,8 @@ async function resolveScam(ctx, session, reason = "") {
     setRp(defender, defenderRp - amount);
     setRp(attacker, attackerRp + amount);
     attacker.totalRpStolen = (attacker.totalRpStolen || 0) + amount;
+    attacker.scamWins = (attacker.scamWins || 0) + 1;
+    defender.scammedCount = (defender.scammedCount || 0) + 1;
     caption =
       `<b>SCAM SUCCESSFUL</b>\n\n` +
       `${mention(session.attackerId, session.attackerName)} sent <b>${escapeHtml(attackerWorker.name)}</b> through the books and came back smiling.\n\n` +
@@ -514,6 +527,8 @@ async function resolveScam(ctx, session, reason = "") {
     amount = Math.floor(attackerRp * 0.05);
     setRp(attacker, attackerRp - amount);
     setRp(defender, defenderRp + amount);
+    attacker.scamLosses = (attacker.scamLosses || 0) + 1;
+    defender.scamDefenses = (defender.scamDefenses || 0) + 1;
     caption =
       `<b>SCAM CRUSHED</b>\n\n` +
       `${mention(session.defenderId, session.defenderName)} beat the scam at the gate and invoiced the attacker for the trouble.\n\n` +
@@ -524,6 +539,8 @@ async function resolveScam(ctx, session, reason = "") {
     amount = Math.floor(Math.min(attackerRp, defenderRp) * 0.02);
     setRp(attacker, attackerRp - amount);
     setRp(defender, defenderRp - amount);
+    attacker.scamTies = (attacker.scamTies || 0) + 1;
+    defender.scamTies = (defender.scamTies || 0) + 1;
     caption =
       `<b>SCAM BROKEN UP</b>\n\n` +
       `Javier stepped between both workers. Nobody won. Both ledgers bled.\n\n` +
@@ -687,14 +704,14 @@ async function finishBonus(bot, session, suddenWinner, mode) {
 }
 
 export function estateCommand(bot) {
-  bot.command(["profile", "stats"], async (ctx) => {
-    return ctx.reply("The old personnel forms were shredded. Use /rank for the Frontera estate profile.", {
+  bot.command("stats", async (ctx) => {
+    return ctx.reply("Use /profile for the Frontera personnel ledger or /rank for the estate ledger.", {
       reply_to_message_id: ctx.message?.message_id
     });
   });
 
   bot.command("immune", async (ctx) => {
-    return ctx.reply("Mikasa's immunity desk is closed. Use /javier to summon Javier Asrahan.", {
+    return ctx.reply("The old immunity desk is closed. Use /javier to summon Javier Asrahan.", {
       reply_to_message_id: ctx.message?.message_id
     });
   });
@@ -870,6 +887,47 @@ export function estateCommand(bot) {
     );
   });
 
+  bot.command("topw", async (ctx) => {
+    const topUsers = await User.find({
+      shadows: { $exists: true, $ne: [] }
+    }).limit(50);
+
+    const ranked = topUsers
+      .map((user) => {
+        const workers = normalizeWorkers(user);
+        const score = workers.reduce((sum, worker) => sum + (TIER_ORDER[worker.level] || 0), 0);
+        const production = workers.reduce((sum, worker) => sum + (WORKER_RP[worker.level] || 0), 0);
+        return { user, workers, score, production };
+      })
+      .sort((a, b) => b.score - a.score || b.workers.length - a.workers.length || getRp(b.user) - getRp(a.user))
+      .slice(0, 10);
+
+    if (!ranked.length) {
+      return ctx.reply("No labour ledgers exist yet. Lloyd cannot rank empty payroll.", {
+        reply_to_message_id: ctx.message?.message_id
+      });
+    }
+
+    const rows = ranked.map((entry, index) => {
+      const name = mention(entry.user.telegramId, entry.user.firstName || "Unnamed Baron");
+      const counts = tierBreakdown(entry.workers);
+      return (
+        `<b>${index + 1}.</b> ${name}\n` +
+        `Workers: <b>${entry.workers.length}</b> | Worker Level Score: <b>${entry.score}</b> | Output: <b>${entry.production} RP/hr</b>\n` +
+        `${tierBall("LOW")} ${counts.LOW}  ${tierBall("MID")} ${counts.MID}  ${tierBall("TOP")} ${counts.TOP}  ${tierBall("LEGEND")} ${counts.LEGEND}  ${tierBall("ULTRA")} ${counts.ULTRA}`
+      );
+    }).join("\n\n");
+
+    return ctx.reply(
+      `<b>Frontera Top Workers</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `<i>Ranked by total worker level score. Low=1, Mid=2, Top=3, Legend=4, Ultra=5.</i>\n\n` +
+        `${rows}\n\n` +
+        `<i>Lloyd: "A strong workforce is not luck. It is payroll with ambition."</i>`,
+      { parse_mode: "HTML", reply_to_message_id: ctx.message?.message_id }
+    );
+  });
+
   bot.command("javier", async (ctx) => {
     if (!ctx.chat || ctx.chat.type === "private") {
       return ctx.reply("This command only works in groups.", { reply_to_message_id: ctx.message?.message_id });
@@ -918,7 +976,18 @@ export function estateCommand(bot) {
     if (Math.random() * 100 < 25) {
       user.lastAriseAt = now;
       await user.save();
-      return ctx.reply(`The recruitment pit is empty. Lloyd bills you for the paperwork anyway.`, { reply_to_message_id: ctx.message?.message_id });
+      const caption = `The recruitment pit is empty. Lloyd bills you for the paperwork anyway.`;
+      const imagePath = randomLloydImage();
+      if (!imagePath) {
+        return ctx.reply(caption, { reply_to_message_id: ctx.message?.message_id });
+      }
+      try {
+        const sent = await ctx.replyWithPhoto({ source: imagePath }, { caption, reply_to_message_id: ctx.message?.message_id });
+        return sent;
+      } catch (err) {
+        console.error('Failed to send Lloyd image for empty recruitment:', err);
+        return ctx.reply(caption, { reply_to_message_id: ctx.message?.message_id });
+      }
     }
 
     const levelKey = rollLevel();
@@ -986,8 +1055,7 @@ export function estateCommand(bot) {
         parse_mode: "HTML",
         reply_to_message_id: ctx.message?.message_id,
         ...Markup.inlineKeyboard([
-          Markup.button.switchToCurrentChat("Explore", `workers ${ctx.from.id}`),
-          Markup.button.callback("Backup Sheet", `workers:explore:${id}`)
+          Markup.button.switchToCurrentChat("Explore", `workers ${ctx.from.id}`)
         ])
       }
     );
@@ -1053,8 +1121,7 @@ export function estateCommand(bot) {
     if (defenderTelegram.is_bot || defenderTelegram.id === ctx.from.id) return ctx.reply("That scam plan is not profitable.", { reply_to_message_id: ctx.message?.message_id });
 
     const attacker = await ensureEstateUser(ctx.from);
-    const defender = await User.findOne({ telegramId: defenderTelegram.id });
-    if (!defender?.estateStarted) return ctx.reply("Target must use /start first.", { reply_to_message_id: ctx.message?.message_id });
+    const defender = await ensureEstateUser(defenderTelegram);
     normalizeWorkers(defender);
     const now = nowSeconds();
     if ((attacker.javierProtectionUntil || attacker.immuneUntil || 0) > now) return ctx.reply("Attacker cannot be protected by Javier.", { reply_to_message_id: ctx.message?.message_id });
@@ -1169,10 +1236,10 @@ export function estateCommand(bot) {
             type: "article",
             id: "no-worker-images",
             title: "No public worker portraits ready",
-            description: "Use Backup Sheet from /workers, or summon a new /worker to cache a Telegram portrait.",
+            description: "Summon a new /worker or set PUBLIC_URL/RENDER_EXTERNAL_URL for inline portraits.",
             input_message_content: {
               message_text:
-                "No inline portraits are ready yet. Use /workers -> Backup Sheet, or summon a new /worker so Telegram can cache the portrait."
+                "No inline portraits are ready yet. Summon a new /worker so Telegram can cache the portrait, or set PUBLIC_URL/RENDER_EXTERNAL_URL for public asset links."
             }
           }
         ],

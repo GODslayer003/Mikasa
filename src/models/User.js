@@ -84,6 +84,11 @@ const userSchema = new mongoose.Schema(
     bonusLosses: { type: Number, default: 0 },
     bonusEliminations: { type: Number, default: 0 },
     totalRpStolen: { type: Number, default: 0 },
+    scamWins: { type: Number, default: 0 },
+    scamLosses: { type: Number, default: 0 },
+    scamDefenses: { type: Number, default: 0 },
+    scammedCount: { type: Number, default: 0 },
+    scamTies: { type: Number, default: 0 },
     tacticStats: {
       aggressive: { type: Number, default: 0 },
       defensive: { type: Number, default: 0 },

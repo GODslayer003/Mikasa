@@ -1,4 +1,3 @@
-// src/commands/topper.js
 import { User } from "../models/User.js";
 
 const ALLOWED_TOPPERS = [
@@ -9,43 +8,49 @@ const ALLOWED_TOPPERS = [
   "ThyDemise"
 ];
 
+function rpOf(user) {
+  if (typeof user.rp === "number") return user.rp;
+  if (typeof user.moons === "number") return user.moons;
+  if (typeof user.balance === "number") return user.balance;
+  return 0;
+}
+
 export function topperCommand(bot) {
   bot.command("topper", async (ctx) => {
     try {
       if (!ctx.from?.username || !ALLOWED_TOPPERS.includes(ctx.from.username)) {
-        return ctx.reply("🚫 You are not authorized to use this command.", {
-          reply_to_message_id: ctx.message.message_id
+        return ctx.reply("Access denied. Lloyd does not open the treasury for spectators.", {
+          reply_to_message_id: ctx.message?.message_id
         });
       }
 
-      const topUsers = await User.find({})
-        .sort({ balance: -1 })
-        .limit(5);
+      const topUsers = await User.find({}).sort({ rp: -1, balance: -1 }).limit(5);
 
       if (!topUsers.length) {
-        return ctx.reply("No data available.", {
-          reply_to_message_id: ctx.message.message_id
+        return ctx.reply("No estate ledgers available.", {
+          reply_to_message_id: ctx.message?.message_id
         });
       }
 
-      let text = "👑 <b>TOP 5 RICHEST PLAYERS (MOON COINS)</b> 👑\n\n";
+      const rows = topUsers.map((user, index) => {
+        const mention = `<a href="tg://user?id=${user.telegramId}">${user.firstName || "Unknown"}</a>`;
+        return `${index + 1}. ${mention}\nRP: <b>${rpOf(user).toLocaleString()}</b>`;
+      }).join("\n\n");
 
-      topUsers.forEach((u, i) => {
-        const mention = `<a href="tg://user?id=${u.telegramId}">${u.firstName || "Unknown"}</a>`;
-        text +=
-          `${i + 1}. ${mention}\n` +
-          `🌙 <b>${u.balance.toLocaleString()}</b> Moon Coins\n\n`;
-      });
-
-      await ctx.reply(text, {
-        parse_mode: "HTML",
-        reply_to_message_id: ctx.message.message_id
-      });
-
+      await ctx.reply(
+        `<b>Frontera Treasury Top 5</b>\n` +
+          `━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `${rows}\n\n` +
+          `<i>Lloyd: "Money is not everything. It is merely the part I count first."</i>`,
+        {
+          parse_mode: "HTML",
+          reply_to_message_id: ctx.message?.message_id
+        }
+      );
     } catch (err) {
       console.error("Topper error:", err);
-      await ctx.reply("⚠️ Unable to fetch leaderboard.", {
-        reply_to_message_id: ctx.message.message_id
+      await ctx.reply("Unable to fetch the treasury ledger.", {
+        reply_to_message_id: ctx.message?.message_id
       });
     }
   });

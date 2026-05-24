@@ -1,0 +1,38 @@
+# Node modules
+node_modules/
+
+# Vite build output
+dist/
+
+# Local env files
+.env
+.env.*
+.env.local
+.vite/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor folders
+.vscode/
+.idea/
+
+# Misc
+coverage/
+*.local
+npm-debug.log
+.pnpm-debug.log
+*.tgz
+
+# Generated assets
+dist/assets/
+
+# Lockfiles (optional: remove if you commit them)
+# package-lock.json
+# yarn.lock
