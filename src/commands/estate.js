@@ -22,6 +22,14 @@ const WORKER_EXPLORE_COLUMNS = 5;
 const WORKER_THUMB_SIZE = 170;
 const WORKER_THUMB_GAP = 8;
 
+// ── Timing constants (ms) ──────────────────────────────────────────────────
+const LOBBY_DURATION_MS      = 30_000;   // 30 s lobby window
+const ROUND_CHOICE_WINDOW_MS = 30_000;   // 30 s per round to choose
+const INTER_ROUND_DELAY_MS   = 50_000;   // 50 s between rounds (reveal + pause)
+const LLOYD_QUOTE_AT_MS      = 15_000;   // mid-round quote fires 15 s in
+// Countdown edit checkpoints during lobby (seconds remaining)
+const LOBBY_COUNTDOWN_CHECKPOINTS = [30, 25, 20, 15, 10, 5, 4, 3, 2, 1];
+
 const RANKS = [
   ["Frontera Baron", 50000],
   ["Master Builder", 20000],
@@ -43,6 +51,9 @@ const TACTIC_BEATS = {
 const scamSessions = new Map();
 const gallerySessions = new Map();
 const bonusSessions = new Map();
+
+// ── Utility: promise-based sleep ───────────────────────────────────────────
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -70,7 +81,6 @@ function formatTime(seconds) {
 }
 
 function getRp(user) {
-  // Prefer `balance` as the canonical stored amount since many flows update it.
   if (typeof user.balance === "number") return Math.max(0, Math.floor(user.balance));
   if (typeof user.rp === "number") return Math.max(0, Math.floor(user.rp));
   if (typeof user.moons === "number") return Math.max(0, Math.floor(user.moons));
@@ -200,12 +210,10 @@ function assetFolderForLevel(level) {
 function findWorkerAssetByName(level, name) {
   const folder = assetFolderForLevel(level);
   if (!folder || !fs.existsSync(folder)) return null;
-
   const wanted = path.parse(String(name || "")).name.toLowerCase();
   if (!wanted) return null;
   const files = fs.readdirSync(folder).filter((file) => /\.(png|jpg|jpeg)$/i.test(file));
   if (!files.length) return null;
-
   const exact = files.find((file) => path.parse(file).name.toLowerCase() === wanted);
   const fuzzy = files.find((file) => path.parse(file).name.toLowerCase().includes(wanted));
   const file = exact || fuzzy;
@@ -219,16 +227,13 @@ function legacyPathBaseName(value = "") {
 
 function resolveWorkerImage(worker) {
   if (worker?.imagePath && fs.existsSync(worker.imagePath)) return worker.imagePath;
-
   const fromName = findWorkerAssetByName(worker?.level, worker?.name);
   if (fromName) return fromName;
-
   if (worker?.imagePath) {
     const legacyName = legacyPathBaseName(worker.imagePath);
     const fromLegacyPath = findWorkerAssetByName(worker?.level, legacyName);
     if (fromLegacyPath) return fromLegacyPath;
   }
-
   return null;
 }
 
@@ -241,23 +246,19 @@ function publicAssetUrl(worker) {
   const imagePath = resolveWorkerImage(worker);
   const baseUrl = publicBaseUrl();
   if (!imagePath || !baseUrl) return null;
-
   const assetsRoot = path.join(__dirname, "..", "..", "assets");
   const relative = path.relative(assetsRoot, imagePath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
-
   const encodedPath = relative
     .split(path.sep)
     .map((part) => encodeURIComponent(part))
     .join("/");
-
   return `${baseUrl}/assets/${encodedPath}`;
 }
 
 function workerCardCaption(worker, index, total) {
   const rate = WORKER_RP[worker.level] || 0;
   const power = WORKER_POWER[worker.level] || worker.power || 0;
-
   return (
     `<b>Frontera Labour Dossier</b>\n` +
     `━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -292,24 +293,17 @@ function workerContractCaption(worker, user) {
 async function sendWorkerCard(ctx, worker, index, total, keyboard, replyId) {
   const caption = workerCardCaption(worker, index, total);
   const imagePath = resolveWorkerImage(worker);
-
   if (imagePath) {
     worker.imagePath = imagePath;
     try {
       return await ctx.replyWithPhoto(
         { source: imagePath },
-        {
-          caption,
-          parse_mode: "HTML",
-          reply_to_message_id: replyId,
-          ...(keyboard || {})
-        }
+        { caption, parse_mode: "HTML", reply_to_message_id: replyId, ...(keyboard || {}) }
       );
     } catch (err) {
       console.error("Worker card photo error:", err);
     }
   }
-
   return ctx.reply(`${caption}\n\n<i>Image unavailable; dossier recovered without portrait.</i>`, {
     parse_mode: "HTML",
     reply_to_message_id: replyId,
@@ -322,7 +316,6 @@ function workerExploreCaption(user, page, totalPages, visibleWorkers) {
   const unique = new Set((user.shadows || []).map((worker) => `${worker.level}:${worker.name}`)).size;
   const pageStart = page * WORKER_EXPLORE_PAGE_SIZE + 1;
   const pageEnd = pageStart + visibleWorkers.length - 1;
-
   return (
     `<b>${escapeHtml(user.firstName || "Baron")}'s Labour Roster</b>\n` +
     `Page <b>${page + 1}/${totalPages}</b> | Showing <b>${pageStart}-${pageEnd}</b>\n\n` +
@@ -335,7 +328,6 @@ function workerExploreCaption(user, page, totalPages, visibleWorkers) {
 function workerExploreKeyboard(sessionId, page, totalPages, visibleWorkers) {
   const startIndex = page * WORKER_EXPLORE_PAGE_SIZE;
   const numberRows = [];
-
   for (let i = 0; i < visibleWorkers.length; i += WORKER_EXPLORE_COLUMNS) {
     const row = visibleWorkers.slice(i, i + WORKER_EXPLORE_COLUMNS).map((worker, offset) => {
       const absoluteIndex = startIndex + i + offset;
@@ -343,12 +335,10 @@ function workerExploreKeyboard(sessionId, page, totalPages, visibleWorkers) {
     });
     numberRows.push(row);
   }
-
   const nav = [];
   if (page > 0) nav.push(Markup.button.callback("Prev", `workers:page:${sessionId}:${page - 1}`));
   nav.push(Markup.button.callback("Close", `workers:close:${sessionId}`));
   if (page < totalPages - 1) nav.push(Markup.button.callback("Next", `workers:page:${sessionId}:${page + 1}`));
-
   return Markup.inlineKeyboard([...numberRows, nav]);
 }
 
@@ -356,7 +346,6 @@ function inlineWorkerResults(user, workers) {
   return workers.slice(0, 50).map((worker, index) => {
     const caption = workerContractCaption(worker, user);
     const description = `${tierBall(worker.level)} ${tierLabel(worker.level)} | ${WORKER_RP[worker.level] || 0} RP/hr`;
-
     if (worker.telegramFileId) {
       return {
         type: "photo",
@@ -368,10 +357,8 @@ function inlineWorkerResults(user, workers) {
         parse_mode: "HTML"
       };
     }
-
     const photoUrl = publicAssetUrl(worker);
     if (!photoUrl) return null;
-
     return {
       type: "photo",
       id: `worker-url-${index}`,
@@ -401,7 +388,6 @@ async function createWorkerCollage(userId, sessionId, workers, page) {
     const x = WORKER_THUMB_GAP + col * (WORKER_THUMB_SIZE + WORKER_THUMB_GAP);
     const y = WORKER_THUMB_GAP + row * (WORKER_THUMB_SIZE + WORKER_THUMB_GAP);
     const imagePath = resolveWorkerImage(worker);
-
     try {
       const image = imagePath
         ? await Jimp.read(imagePath)
@@ -436,27 +422,14 @@ async function sendWorkerExplore(ctx, user, sessionId, page, edit = false) {
   if (edit) {
     try {
       return await ctx.editMessageMedia(
-        {
-          type: "photo",
-          media: { source: outputPath },
-          caption,
-          parse_mode: "HTML"
-        },
+        { type: "photo", media: { source: outputPath }, caption, parse_mode: "HTML" },
         keyboard
       );
     } catch (err) {
       console.error("Worker explore edit error:", err);
     }
   }
-
-  return ctx.replyWithPhoto(
-    { source: outputPath },
-    {
-      caption,
-      parse_mode: "HTML",
-      ...keyboard
-    }
-  );
+  return ctx.replyWithPhoto({ source: outputPath }, { caption, parse_mode: "HTML", ...keyboard });
 }
 
 function tacticLabel(tactic) {
@@ -561,631 +534,59 @@ async function resolveScam(ctx, session, reason = "") {
   });
 }
 
-async function runBonusRound(bot, session) {
-  if (session.finished) return;
-  
-  const alive = session.players.filter((player) => player.alive);
-  if (alive.length <= 1) return finishBonus(bot, session, alive[0] || null, "sudden");
-  if (session.round > 5) return finishBonus(bot, session, null, "score");
-
-  session.choices = new Map();
-  const isLullaby = session.round === 3;
-
-  // Send round announcement to group
-  const roundAnnouncement = isLullaby
-    ? `🎵 <b>Phase ${session.round}: Lloyd's Concert</b>\n\nChoose fast. Mercy is not in the budget.`
-    : `🏗️ <b>Phase ${session.round}: Frontera Bonus</b>\n\n<i>"Don't tell me what's ethical. Tell me what's profitable."</i>`;
-
-  await bot.telegram.sendMessage(session.chatId, roundAnnouncement, { parse_mode: "HTML" });
-
-  // Send DM work orders to each alive player with 15s timer
-  for (const player of alive) {
-    try {
-      const dmCaption = buildRoundDmCaption(player, session, isLullaby);
-      const buttons = isLullaby
-        ? [
-            Markup.button.callback("🛡️ Earplugs", `bonus:choice:${session.id}:earplugs`),
-            Markup.button.callback("😤 Endure", `bonus:choice:${session.id}:endure`),
-            Markup.button.callback("💢 Push", `bonus:choice:${session.id}:push`)
-          ]
-        : [
-            Markup.button.callback("⚖️ Share", `bonus:choice:${session.id}:share`),
-            Markup.button.callback("🪙 Embezzle", `bonus:choice:${session.id}:embezzle`),
-            Markup.button.callback("📢 Snitch", `bonus:choice:${session.id}:snitch`)
-          ];
-
-      const lloydImage = getRandomLloydImage();
-      let dmMsg = null;
-
-      if (lloydImage) {
-        const cachedFileId = getCachedFileId(lloydImage);
-        try {
-          if (cachedFileId) {
-            dmMsg = await bot.telegram.sendPhoto(player.id, cachedFileId, {
-              caption: dmCaption,
-              parse_mode: "HTML",
-              ...Markup.inlineKeyboard(buttons, { columns: 1 })
-            });
-          } else {
-            dmMsg = await bot.telegram.sendPhoto(player.id, { source: lloydImage }, {
-              caption: dmCaption,
-              parse_mode: "HTML",
-              ...Markup.inlineKeyboard(buttons, { columns: 1 })
-            });
-            if (dmMsg.photo?.length > 0) {
-              setCachedFileId(lloydImage, dmMsg.photo[dmMsg.photo.length - 1].file_id);
-            }
-          }
-          session.roundDmIds.set(player.id, dmMsg.message_id);
-        } catch (photoErr) {
-          // Fall back to text-only
-          dmMsg = await bot.telegram.sendMessage(player.id, dmCaption, {
-            parse_mode: "HTML",
-            ...Markup.inlineKeyboard(buttons, { columns: 1 })
-          });
-          session.roundDmIds.set(player.id, dmMsg.message_id);
-        }
-      } else {
-        dmMsg = await bot.telegram.sendMessage(player.id, dmCaption, {
-          parse_mode: "HTML",
-          ...Markup.inlineKeyboard(buttons, { columns: 1 })
-        });
-        session.roundDmIds.set(player.id, dmMsg.message_id);
-      }
-    } catch (err) {
-      // DM error - notify group, apply default choice silently
-      await bot.telegram.sendMessage(
-        session.chatId,
-        `📭 <b>${escapeHtml(player.name)}</b> didn't open their work order. Default choice applied.`,
-        { parse_mode: "HTML" }
-      );
-      const defaultChoice = isLullaby ? "endure" : "share";
-      session.choices.set(player.id, defaultChoice);
+// ══════════════════════════════════════════════════════════════════════════════
+// LLOYD PHOTO HELPER — send or reuse cached file_id
+// ══════════════════════════════════════════════════════════════════════════════
+async function sendLloydPhoto(telegram, chatId, caption = null) {
+  const imagePath = getRandomLloydImage();
+  if (!imagePath) {
+    if (caption) {
+      await telegram.sendMessage(chatId, caption, { parse_mode: "HTML" }).catch(() => {});
     }
-
-    // Add 100ms delay between DM sends to avoid Telegram rate limits
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    return null;
   }
 
-  // Lloyd mid-round quote at 7.5s
-  setTimeout(async () => {
-    try {
-      const lloydImage = getRandomLloydImage();
-      if (lloydImage) {
-        const cachedFileId = getCachedFileId(lloydImage);
-        const quote = getLloydQuote();
-        const caption = `<i>"${quote}"</i>\n\n— Lloyd Frontera\nFrontera County Development Bureau`;
-        try {
-          if (cachedFileId) {
-            await bot.telegram.sendPhoto(session.chatId, cachedFileId, { caption, parse_mode: "HTML" });
-          } else {
-            const msg = await bot.telegram.sendPhoto(session.chatId, { source: lloydImage }, { caption, parse_mode: "HTML" });
-            if (msg.photo?.length > 0) {
-              setCachedFileId(lloydImage, msg.photo[msg.photo.length - 1].file_id);
-            }
-          }
-        } catch (err) {
-          // Silently fail
-        }
-      }
-    } catch (err) {
-      // Silently fail
-    }
-  }, 7500);
+  const opts = caption ? { caption, parse_mode: "HTML" } : {};
+  const cachedId = getCachedFileId(imagePath);
 
-  // Settle after 15s
-  setTimeout(() => settleBonusRound(bot, bot.telegram, session.id), 15 * 1000);
-}
-
-async function settleBonusRound(bot, telegram, sessionId) {
-  const session = bonusSessions.get(sessionId);
-  if (!session || session.finished) return;
-
-  const alive = session.players.filter((player) => player.alive);
-  const isLullaby = session.round === 3;
-
-  // Sleep function helper
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  // Step 0 (0s): Send Lloyd photo (no text)
-  await sleep(0);
   try {
-    const lloydImage = getRandomLloydImage();
-    if (lloydImage) {
-      const cachedFileId = getCachedFileId(lloydImage);
-      try {
-        if (cachedFileId) {
-          await telegram.sendPhoto(session.chatId, cachedFileId);
-        } else {
-          const msg = await telegram.sendPhoto(session.chatId, { source: lloydImage });
-          if (msg.photo?.length > 0) {
-            setCachedFileId(lloydImage, msg.photo[msg.photo.length - 1].file_id);
-          }
-        }
-      } catch (err) {
-        // Silently fail
-      }
-    }
-  } catch (err) {
-    // Silently fail
-  }
-
-  // Step 1 (5s): Send CHOICES message
-  await sleep(5000);
-  const choicesLines = [`📋 <b>Phase ${session.round} — Work Orders Revealed</b>`];
-  const sortedAlive = [...alive].sort((a, b) => a.name.localeCompare(b.name));
-  for (const player of sortedAlive) {
-    const choice = session.choices.get(player.id) || (isLullaby ? "endure" : "share");
-    const label = getChoiceLabel(choice);
-    const emoji = getChoiceEmoji(choice);
-    const isDefault = !session.choices.has(player.id);
-    const suffix = isDefault ? " <i>(default)</i>" : "";
-    choicesLines.push(`${emoji} <b>${escapeHtml(player.name)}</b> → ${label}${suffix}`);
-  }
-  try {
-    await telegram.sendMessage(session.chatId, choicesLines.join("\n"), { parse_mode: "HTML" });
-  } catch (err) {
-    // Silently fail
-  }
-
-  // Step 2 (10s): Send OUTCOME message
-  await sleep(5000);
-  const outcomeMsg = buildOutcomeMessage(session, alive, isLullaby);
-  try {
-    await telegram.sendMessage(session.chatId, outcomeMsg, { parse_mode: "HTML" });
-  } catch (err) {
-    // Silently fail
-  }
-
-  // Step 3 (17s): Send STANDINGS
-  await sleep(7000);
-  const standingsMsg = buildStandingsMessage(session, alive);
-  try {
-    await telegram.sendMessage(session.chatId, standingsMsg, { parse_mode: "HTML" });
-  } catch (err) {
-    // Silently fail
-  }
-
-  // Step 4 (25s): Send countdown message with live edits
-  await sleep(8000);
-  let countdownMsg = null;
-  try {
-    countdownMsg = await telegram.sendMessage(
-      session.chatId,
-      `🏗️ <b>Phase ${session.round + 1} begins in 5...</b>`,
-      { parse_mode: "HTML" }
-    );
-  } catch (err) {
-    // Silently fail
-  }
-
-  // Edit countdown 4, 3, 2, 1
-  for (let i = 4; i >= 1; i--) {
-    await sleep(1000);
-    if (countdownMsg) {
-      try {
-        await telegram.editMessageText(
-          session.chatId,
-          countdownMsg.message_id,
-          undefined,
-          `🏗️ <b>Phase ${session.round + 1} begins in ${i}...</b>`,
-          { parse_mode: "HTML" }
-        );
-      } catch (err) {
-        // Silently fail
-      }
-    }
-  }
-
-  // Apply damage/stash changes for this round
-  if (isLullaby) {
-    for (const player of alive) {
-      const choice = session.choices.get(player.id) || "endure";
-      if (choice === "earplugs") {
-        player.stash = Math.max(0, player.stash - 300);
-      } else if (choice === "push") {
-        const targets = alive.filter((p) => p.id !== player.id && p.alive);
-        const target = targets[Math.floor(Math.random() * targets.length)];
-        if (!target) {
-          player.hp -= 50;
-        } else if ((session.choices.get(target.id) || "endure") === "earplugs") {
-          player.hp = 0;
-        } else {
-          target.hp = 0;
-        }
-      } else {
-        player.hp -= 50;
-      }
-    }
-  } else {
-    const choices = alive.map((player) => ({ player, choice: session.choices.get(player.id) || "share" }));
-    const embezzlers = choices.filter((item) => item.choice === "embezzle");
-    const snitches = choices.filter((item) => item.choice === "snitch");
-
-    if (!embezzlers.length && !snitches.length) {
-      const share = Math.floor(1000 / alive.length);
-      alive.forEach((player) => (player.stash += share));
-    } else if (embezzlers.length === 1 && !snitches.length) {
-      embezzlers[0].player.stash += 1000;
-    } else if (embezzlers.length > 1 && !snitches.length) {
-      embezzlers.forEach(({ player }) => (player.hp -= 30));
-    } else if (embezzlers.length && snitches.length) {
-      embezzlers.forEach(({ player }) => (player.hp -= 60));
-      snitches.forEach(({ player }) => (player.stash += 500));
-    }
-  }
-
-  // Handle eliminations and notify group
-  for (const player of alive) {
-    if (player.hp <= 0 && player.alive) {
-      player.alive = false;
-      const user = await User.findOne({ telegramId: player.id });
-      if (user) {
-        user.bonusEliminations = (user.bonusEliminations || 0) + 1;
-        await user.save();
-      }
-
-      // Send elimination drama
-      const eliminationMsg = buildEliminationMessage(player);
-      try {
-        await telegram.sendMessage(session.chatId, eliminationMsg, { parse_mode: "HTML" });
-      } catch (err) {
-        // Silently fail
-      }
-
-      // DM to eliminated player
-      try {
-        await telegram.sendMessage(
-          player.id,
-          `🔨 <b>You've been fired</b> from Lloyd's work site, ${escapeHtml(player.name)}.\nYour stash of ${player.stash} RP has been forfeited.\n\n<i>Javier sends his condolences. The hamster does not.</i>`,
-          { parse_mode: "HTML" }
-        );
-      } catch (err) {
-        // Silently fail
-      }
-    }
-  }
-
-  // Step 5 (30s): Call next round
-  await sleep(5000);
-  session.round += 1;
-  runBonusRound(bot, session);
-}
-
-async function finishBonus(bot, session, suddenWinner, mode) {
-  if (session.finished) return;
-  session.finished = true;
-  bonusSessions.delete(session.id);
-
-  const survivors = session.players.filter((player) => player.alive);
-  let winner = suddenWinner;
-  if (!winner && mode === "score" && survivors.length) {
-    winner = [...survivors].sort((a, b) => b.stash - a.stash)[0];
-  }
-
-  const lloydImage = getRandomLloydImage();
-  let gameEndCaption = "";
-
-  if (!winner) {
-    gameEndCaption = buildTotalWipeMessage(session);
-  } else {
-    gameEndCaption = buildWinnerMessage(session, winner);
-  }
-
-  // Send game end message with photo
-  try {
-    if (lloydImage) {
-      const cachedFileId = getCachedFileId(lloydImage);
-      try {
-        if (cachedFileId) {
-          await bot.telegram.sendPhoto(session.chatId, cachedFileId, { caption: gameEndCaption, parse_mode: "HTML" });
-        } else {
-          const msg = await bot.telegram.sendPhoto(session.chatId, { source: lloydImage }, { caption: gameEndCaption, parse_mode: "HTML" });
-          if (msg.photo?.length > 0) {
-            setCachedFileId(lloydImage, msg.photo[msg.photo.length - 1].file_id);
-          }
-        }
-      } catch (err) {
-        // Fall back to text-only
-        await bot.telegram.sendMessage(session.chatId, gameEndCaption, { parse_mode: "HTML" });
-      }
+    let msg;
+    if (cachedId) {
+      msg = await telegram.sendPhoto(chatId, cachedId, opts);
     } else {
-      await bot.telegram.sendMessage(session.chatId, gameEndCaption, { parse_mode: "HTML" });
+      msg = await telegram.sendPhoto(chatId, { source: imagePath }, opts);
+      const fileId = msg?.photo?.at(-1)?.file_id;
+      if (fileId) setCachedFileId(imagePath, fileId);
     }
+    return msg;
   } catch (err) {
-    console.error("Error sending game end message:", err.message);
-  }
-
-  // Update database for all players
-  for (const player of session.players) {
-    const user = await User.findOne({ telegramId: player.id });
-    if (!user) continue;
-    
-    user.bonusGamesPlayed = (user.bonusGamesPlayed || 0) + 1;
-    if (!winner || player.id !== winner.id) {
-      user.bonusLosses = (user.bonusLosses || 0) + 1;
+    // If cached ID is stale, retry with file source
+    if (cachedId) {
+      try {
+        const msg = await telegram.sendPhoto(chatId, { source: imagePath }, opts);
+        const fileId = msg?.photo?.at(-1)?.file_id;
+        if (fileId) setCachedFileId(imagePath, fileId);
+        return msg;
+      } catch (_) {}
     }
-    
-    // Award stash to survivors
-    if (player.alive && player.stash > 0) {
-      setRp(user, getRp(user) + player.stash);
+    // Last resort: text-only
+    if (caption) {
+      await telegram.sendMessage(chatId, caption, { parse_mode: "HTML" }).catch(() => {});
     }
-    
-    // Award payout to winner
-    if (winner && player.id === winner.id) {
-      const payout = winner.stash + session.prizePot;
-      setRp(user, getRp(user) + payout);
-      user.bonusWins = (user.bonusWins || 0) + 1;
-    }
-    
-    await user.save();
+    return null;
   }
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// BONUS MESSAGE BUILDERS
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-function buildIntroCaption() {
-  return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏗️ LLOYD'S BONUS CONSTRUCTION TENDER
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"This is a perfectly legal business arrangement.
-Probably. I haven't checked."
-— Lloyd Frontera, Frontera County Development Bureau
-
-📋 PROJECT BRIEF
-┌──────────────────────────────┐
-│ 💰 Bid Fee:    100 RP per player │
-│ 👷 Workers:   3–8 players         │
-│ 🏗️ Phases:    5 rounds max         │
-│ 🏆 Payout:    Winner takes pot     │
-└──────────────────────────────┘
-
-⚙️ HOW THE TENDER WORKS
-Each phase, Lloyd sends you a private work order.
-Pick your strategy — but remember, others are bidding too.
-
-⚖️ SHARE THE CONTRACT
-   Split 1000 RP equally with all workers. Safe profit.
-
-🪙 EMBEZZLE THE FUNDS
-   Pocket 1000 RP. Only works if YOU'RE the only thief.
-   Multiple embezzlers? You all take -30 HP. Classic greed.
-
-📢 SNITCH TO THE INSPECTOR
-   Report embezzlers. Earn 500 RP per thief caught.
-   No crime? No reward. Pick your moment.
-
-⚠️ PHASE 3 — THE LULLABY CONCERT
-(Lloyd accidentally booked a magic singer)
-   🎵 ENDURE  — Take -50 HP. Suffer through it.
-   🛡️ EARPLUGS — Pay 300 RP. Stay shielded.
-   💢 PUSH    — Shove someone. Risky if they're shielded.
-
-❤️ HP = Your job security. Hit 0 = you're fired.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⏳ Lobby closes in: 60s
-👷 Workers on site: 0 / 8
-💰 Prize pot: 0 RP
-━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-}
-
-function buildLobbyCaption(session, timeLeft) {
-  const playersList = session.players.map((p) => `   👷 ${escapeHtml(p.name)}`).join("\n");
-  const playerSection = playersList ? `\n✅ ON SITE:\n${playersList}` : "";
-  
-  return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏗️ LLOYD'S BONUS CONSTRUCTION TENDER
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"This is a perfectly legal business arrangement.
-Probably. I haven't checked."
-— Lloyd Frontera, Frontera County Development Bureau
-
-📋 PROJECT BRIEF
-┌──────────────────────────────┐
-│ 💰 Bid Fee:    100 RP per player │
-│ 👷 Workers:   3–8 players         │
-│ 🏗️ Phases:    5 rounds max         │
-│ 🏆 Payout:    Winner takes pot     │
-└──────────────────────────────┘
-
-⚙️ HOW THE TENDER WORKS
-Each phase, Lloyd sends you a private work order.
-Pick your strategy — but remember, others are bidding too.
-
-⚖️ SHARE THE CONTRACT
-   Split 1000 RP equally with all workers. Safe profit.
-
-🪙 EMBEZZLE THE FUNDS
-   Pocket 1000 RP. Only works if YOU'RE the only thief.
-   Multiple embezzlers? You all take -30 HP. Classic greed.
-
-📢 SNITCH TO THE INSPECTOR
-   Report embezzlers. Earn 500 RP per thief caught.
-   No crime? No reward. Pick your moment.
-
-⚠️ PHASE 3 — THE LULLABY CONCERT
-(Lloyd accidentally booked a magic singer)
-   🎵 ENDURE  — Take -50 HP. Suffer through it.
-   🛡️ EARPLUGS — Pay 300 RP. Stay shielded.
-   💢 PUSH    — Shove someone. Risky if they're shielded.
-
-❤️ HP = Your job security. Hit 0 = you're fired.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⏳ Lobby closes in: ${timeLeft}s
-👷 Workers on site: ${session.players.length} / 8
-💰 Prize pot: ${session.prizePot} RP
-━━━━━━━━━━━━━━━━━━━━━━━━━━━${playerSection}`;
-}
-
-function buildRoundDmCaption(player, session, isLullaby) {
-  const aliveCount = session.players.filter((p) => p.alive).length;
-  const hpBar = buildHpBar(player.hp);
-  
-  if (isLullaby) {
-    return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎵 PHASE ${session.round} — THE LULLABY INCIDENT · ${escapeHtml(player.name)}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"I accidentally hired a magical singer for the work site.
-This is entirely Javier's fault."
-
-📊 YOUR STATUS
-❤️ HP:    ${player.hp}/100  ${hpBar}
-💰 Stash: ${player.stash} RP
-
-🎵 THE SONG IS PLAYING...
-
-🛡️ BUY EARPLUGS — Pay 300 RP. Immune to being Pushed.
-😤 ENDURE — No cost. Take -50 HP. Suffer with dignity.
-💢 PUSH — Shove a random coworker.
-         If they have earplugs: YOU take -100 HP instead.
-         If no target exists: you take -50 HP.
-
-⏳ Decision expires in: 15s
-━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-  } else {
-    return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏗️ PHASE ${session.round} WORK ORDER — ${escapeHtml(player.name)}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"Don't tell me what's ethical. Tell me what's profitable."
-
-📊 YOUR STATUS
-❤️ HP:    ${player.hp}/100  ${hpBar}
-💰 Stash: ${player.stash} RP
-👷 Still working: ${aliveCount} players
-🏦 Current pot: ${session.prizePot} RP
-
-📋 CHOOSE YOUR STRATEGY
-
-⚖️ SHARE THE CONTRACT
-   Split 1000 RP equally. Boring, but reliable.
-
-🪙 EMBEZZLE THE FUNDS
-   Take 1000 RP alone. Bold move.
-   If others embezzle too: all lose -30 HP.
-
-📢 SNITCH
-   Catch a thief, earn 500 RP per head.
-   No thieves? You get nothing. Read the room.
-
-⏳ Work order expires in: 15s
-━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-  }
-}
-
-function buildChoiceConfirmation(playerName, choiceLabel, received, total) {
-  return `━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ WORK ORDER SUBMITTED, ${escapeHtml(playerName)}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-You filed: ${choiceLabel}
-
-<i>Lloyd is reviewing submissions...</i>
-📬 Received: ${received} / ${total} work orders
-━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-}
-
-function buildOutcomeMessage(session, alive, isLullaby) {
-  const lines = [`⚡ <b>PHASE ${session.round} OUTCOME</b>`];
-
-  if (isLullaby) {
-    // Lullaby outcomes are handled separately; just announce summary
-    lines.push("🎵 Lloyd's concert has concluded. Workers survived... or didn't.");
-  } else {
-    const choices = alive.map((player) => ({ player, choice: session.choices.get(player.id) || "share" }));
-    const embezzlers = choices.filter((item) => item.choice === "embezzle");
-    const snitches = choices.filter((item) => item.choice === "snitch");
-
-    if (!embezzlers.length && !snitches.length) {
-      const share = Math.floor(1000 / alive.length);
-      lines.push(`🤝 All workers shared — 1000 RP split equally. ${share} RP each.`);
-    } else if (embezzlers.length === 1 && !snitches.length) {
-      lines.push(`🪙 Solo embezzler! ${mention(embezzlers[0].player.id, embezzlers[0].player.name)} pockets 1000 RP.`);
-    } else if (embezzlers.length > 1 && !snitches.length) {
-      lines.push(`💥 ${embezzlers.length} embezzlers collided! All lose -30 HP.`);
-    } else if (embezzlers.length && snitches.length) {
-      lines.push(`📢 Inspectors caught ${embezzlers.length} thief/thieves!`);
-      lines.push(`   Snitches earn 500 RP each.`);
-    } else {
-      lines.push(`🙅 Snitches found nothing. No embezzlers today.`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-function buildStandingsMessage(session, alive) {
-  const lines = [`📊 <b>SITE ROSTER — AFTER PHASE ${session.round}</b>`];
-  const sorted = [...session.players].sort((a, b) => b.stash - a.stash);
-  
-  sorted.forEach((player, index) => {
-    const status = player.alive ? "❤️" : "💀";
-    const hpBar = buildHpBar(player.hp);
-    lines.push(`${index + 1}. ${status} <b>${escapeHtml(player.name)}</b>\n   ❤️ ${player.hp}/100  ${hpBar} · 💰 ${player.stash} RP`);
-  });
-  
-  return lines.join("\n");
-}
-
-function buildEliminationMessage(player) {
-  const lines = [`🔨 <b>${escapeHtml(player.name)} HAS BEEN FIRED</b>`];
-  lines.push(`Turns out greed has a headcount limit.`);
-  lines.push(`<i>"HR has been notified. Well. I am HR. You're fired."</i>`);
-  lines.push(`— Lloyd Frontera`);
-  return lines.join("\n");
-}
-
-function buildWinnerMessage(session, winner) {
-  const payout = winner.stash + session.prizePot;
-  const lines = [
-    `🏆 <b>PROJECT COMPLETE — LLOYD'S VERDICT</b>`,
-    ``,
-    `One worker outlasted everyone else.`,
-    `Or at least outscammed them.`,
-    ``,
-    `👷 <b>${mention(winner.id, winner.name)}</b> wins the Frontera Tender!`,
-    ``,
-    `💰 <b>TOTAL PAYOUT: ${payout.toLocaleString()} RP</b>`,
-    `   ├ Personal stash:  ${winner.stash} RP`,
-    `   └ Prize pot:       ${session.prizePot} RP`,
-    ``,
-    `📊 FINAL ROSTER`
-  ];
-  
-  const sorted = [...session.players].sort((a, b) => b.stash - a.stash);
-  sorted.forEach((player, index) => {
-    const status = player.alive ? "✅" : "❌";
-    lines.push(`${index + 1}. ${status} ${escapeHtml(player.name)} — ${player.stash} RP`);
-  });
-  
-  lines.push(``);
-  lines.push(`<i>"I'd say I'm proud, but I'm mostly relieved.`);
-  lines.push(`Frontera County thanks you for your service."</i>`);
-  lines.push(`— Lloyd Frontera, Chief Development Officer`);
-  
-  return lines.join("\n");
-}
-
-function buildTotalWipeMessage(session) {
-  return `☠️ <b>COMPLETE PROJECT COLLAPSE</b>
-
-Every single worker has been fired.
-The ${session.prizePot} RP prize pot has been... reclaimed.
-(By Lloyd. Obviously.)
-
-<i>"I've never seen this level of collective incompetence.
-It's almost impressive. Almost."</i>
-— Lloyd Frontera`;
-}
+// ══════════════════════════════════════════════════════════════════════════════
+// BONUS GAME — MESSAGE BUILDERS
+// ══════════════════════════════════════════════════════════════════════════════
 
 function getChoiceLabel(choice) {
   const labels = {
-    share: "⚖️ Share",
-    embezzle: "🪙 Embezzle",
-    snitch: "📢 Snitch",
-    earplugs: "🛡️ Earplugs",
+    share: "⚖️ Share the Contract",
+    embezzle: "🪙 Embezzle the Funds",
+    snitch: "📢 Snitch to Inspector",
+    earplugs: "🛡️ Buy Earplugs",
     endure: "😤 Endure",
     push: "💢 Push"
   };
@@ -1193,17 +594,640 @@ function getChoiceLabel(choice) {
 }
 
 function getChoiceEmoji(choice) {
-  const emojis = {
+  return {
     share: "⚖️",
     embezzle: "🪙",
     snitch: "📢",
     earplugs: "🛡️",
     endure: "😤",
     push: "💢"
-  };
-  return emojis[choice] || "📭";
+  }[choice] || "📭";
 }
 
+function buildIntroCaption(timeLeft = 30, playerCount = 0, prizePot = 0, players = []) {
+  const playerSection = players.length
+    ? `\n✅ <b>ON SITE:</b>\n${players.map((p) => `   👷 ${escapeHtml(p.name)}`).join("\n")}\n`
+    : "";
+
+  return (
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🏗️ <b>LLOYD'S BONUS CONSTRUCTION TENDER</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `<i>"This is a perfectly legal business arrangement.\nProbably. I haven't checked."</i>\n` +
+    `— Lloyd Frontera, Frontera County Development Bureau\n\n` +
+
+    `📋 <b>PROJECT BRIEF</b>\n` +
+    `┌─────────────────────────────┐\n` +
+    `│ 💰 Bid Fee:   100 RP per player │\n` +
+    `│ 👷 Workers:   3–8 players        │\n` +
+    `│ 🏗️ Phases:    5 rounds max        │\n` +
+    `│ 🏆 Payout:    Winner takes pot    │\n` +
+    `└─────────────────────────────┘\n\n` +
+
+    `⚙️ <b>HOW THE TENDER WORKS</b>\n` +
+    `Each phase, Lloyd sends you a private work order via DM.\n` +
+    `Pick your strategy — but remember, others are bidding too.\n\n` +
+
+    `⚖️ <b>SHARE THE CONTRACT</b>\n` +
+    `   Split 1000 RP equally with all alive workers.\n\n` +
+    `🪙 <b>EMBEZZLE THE FUNDS</b>\n` +
+    `   Pocket 1000 RP solo. Collide with others? All lose -30 HP.\n\n` +
+    `📢 <b>SNITCH TO THE INSPECTOR</b>\n` +
+    `   Catch embezzlers for 500 RP each. No crime, no reward.\n\n` +
+
+    `⚠️ <b>PHASE 3 — THE LULLABY CONCERT</b>\n` +
+    `<i>(Lloyd accidentally booked a magic singer)</i>\n` +
+    `   🛡️ Earplugs — Pay 300 RP, stay shielded.\n` +
+    `   😤 Endure — Take -50 HP. Free and painful.\n` +
+    `   💢 Push — Shove someone. Backfires if they're shielded.\n\n` +
+
+    `❤️ <b>HP = Job security. Hit 0 = fired.</b>\n\n` +
+
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `⏳ Lobby closes in: <b>${timeLeft}s</b>\n` +
+    `👷 Workers on site: <b>${playerCount} / 8</b>\n` +
+    `💰 Prize pot: <b>${prizePot} RP</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━` +
+    `${playerSection}`
+  );
+}
+
+function buildRoundDmCaption(player, session, isLullaby, secondsLeft) {
+  const aliveCount = session.players.filter((p) => p.alive).length;
+  const hpBar = buildHpBar(player.hp);
+
+  if (isLullaby) {
+    return (
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🎵 <b>PHASE ${session.round} — THE LULLABY INCIDENT</b>\n` +
+      `<b>Contractor: ${escapeHtml(player.name)}</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `<i>"I accidentally hired a magical singer for the work site.\nThis is entirely Javier's fault."</i>\n\n` +
+
+      `📊 <b>YOUR STATUS</b>\n` +
+      `❤️ HP:    ${player.hp}/100  ${hpBar}\n` +
+      `💰 Stash: ${player.stash.toLocaleString()} RP\n\n` +
+
+      `🎵 <b>THE SONG IS PLAYING...</b>\n\n` +
+      `🛡️ <b>BUY EARPLUGS</b> — Pay 300 RP. Immune to being Pushed.\n` +
+      `😤 <b>ENDURE</b> — No cost. Take -50 HP. Suffer with dignity.\n` +
+      `💢 <b>PUSH</b> — Shove a random coworker.\n` +
+      `         If they have earplugs: YOU take -100 HP.\n` +
+      `         If no other target: you take -50 HP.\n\n` +
+
+      `⏳ <b>Decision expires in: ${secondsLeft}s</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+    );
+  }
+
+  return (
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🏗️ <b>PHASE ${session.round} WORK ORDER</b>\n` +
+    `<b>Contractor: ${escapeHtml(player.name)}</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `<i>"Don't tell me what's ethical. Tell me what's profitable."</i>\n\n` +
+
+    `📊 <b>YOUR STATUS</b>\n` +
+    `❤️ HP:    ${player.hp}/100  ${hpBar}\n` +
+    `💰 Stash: ${player.stash.toLocaleString()} RP\n` +
+    `👷 Still working: ${aliveCount} players\n` +
+    `🏦 Prize pot: ${session.prizePot.toLocaleString()} RP\n\n` +
+
+    `📋 <b>CHOOSE YOUR STRATEGY</b>\n\n` +
+    `⚖️ <b>SHARE THE CONTRACT</b>\n` +
+    `   Split 1000 RP equally. Boring, but reliable.\n\n` +
+    `🪙 <b>EMBEZZLE THE FUNDS</b>\n` +
+    `   Take 1000 RP alone. If others embezzle too: all lose -30 HP.\n\n` +
+    `📢 <b>SNITCH</b>\n` +
+    `   Catch a thief, earn 500 RP per head. No thieves = no reward.\n\n` +
+
+    `⏳ <b>Work order expires in: ${secondsLeft}s</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+  );
+}
+
+function buildChoiceConfirmation(playerName, choiceLabel, received, total) {
+  return (
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `✅ <b>WORK ORDER SUBMITTED</b>\n` +
+    `Contractor: ${escapeHtml(playerName)}\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `You filed: ${choiceLabel}\n\n` +
+    `<i>Lloyd is reviewing submissions...</i>\n` +
+    `📬 Received: <b>${received} / ${total}</b> work orders\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+  );
+}
+
+function buildOutcomeLines(session, alive, isLullaby) {
+  const lines = [`⚡ <b>PHASE ${session.round} OUTCOME</b>\n`];
+
+  if (isLullaby) {
+    lines.push("🎵 Lloyd's concert has concluded. Workers survived... or didn't.");
+    return lines.join("\n");
+  }
+
+  const choices = alive.map((p) => ({ player: p, choice: session.choices.get(p.id) || "share" }));
+  const embezzlers = choices.filter((c) => c.choice === "embezzle");
+  const snitches   = choices.filter((c) => c.choice === "snitch");
+  const sharers    = choices.filter((c) => c.choice === "share");
+
+  if (!embezzlers.length && !snitches.length) {
+    const share = alive.length > 0 ? Math.floor(1000 / alive.length) : 0;
+    lines.push(`🤝 All workers shared the contract.\n   <b>+${share} RP each</b> (1000 RP ÷ ${alive.length} workers).`);
+  } else if (embezzlers.length === 1 && !snitches.length) {
+    lines.push(`🪙 Solo embezzler!\n   ${mention(embezzlers[0].player.id, embezzlers[0].player.name)} pockets <b>+1000 RP</b>.`);
+  } else if (embezzlers.length > 1 && !snitches.length) {
+    const names = embezzlers.map((c) => mention(c.player.id, c.player.name)).join(", ");
+    lines.push(`💥 <b>${embezzlers.length} embezzlers collided!</b>\n   ${names}\n   All lose <b>-30 HP</b>. Greed divided by greed.`);
+  } else if (embezzlers.length && snitches.length) {
+    const thiefNames   = embezzlers.map((c) => mention(c.player.id, c.player.name)).join(", ");
+    const snitchNames  = snitches.map((c) => mention(c.player.id, c.player.name)).join(", ");
+    lines.push(`📢 The inspector caught ${embezzlers.length} thief/thieves!\n   Thieves (${thiefNames}): <b>-60 HP</b>\n   Snitches (${snitchNames}): <b>+500 RP each</b>`);
+  } else {
+    lines.push(`🙅 Snitches found nothing. No embezzlers today.\n   Everyone keeps what they had.`);
+  }
+
+  return lines.join("\n");
+}
+
+function buildStandingsMessage(session, roundNum) {
+  const lines = [`📊 <b>SITE ROSTER — AFTER PHASE ${roundNum}</b>\n`];
+  const sorted = [...session.players].sort((a, b) => b.stash - a.stash || b.hp - a.hp);
+
+  sorted.forEach((player, index) => {
+    const status = player.alive ? "❤️" : "💀";
+    const hpBar = buildHpBar(Math.max(0, player.hp));
+    lines.push(
+      `${index + 1}. ${status} <b>${escapeHtml(player.name)}</b>\n` +
+      `    ❤️ ${Math.max(0, player.hp)}/100  ${hpBar}\n` +
+      `    💰 Stash: ${player.stash.toLocaleString()} RP`
+    );
+    // Blank line between players for readability
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}
+
+function buildEliminationMessage(player, cause = "default") {
+  const causeLines = {
+    embezzle_collision: "Turns out greed has a headcount limit.",
+    snitch_caught:      "The inspector was watching. Classic.",
+    push_backfire:      "Tried to push someone armored. That's a self-inflicted termination.",
+    endure_fatal:       "The lullaby claimed another victim. It was a very catchy song.",
+    push_no_target:     "No one to push. Physics punished them instead.",
+    default:            "Their contract has been terminated without severance."
+  };
+
+  return (
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🔨 <b>${escapeHtml(player.name)} HAS BEEN FIRED</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `${causeLines[cause] || causeLines.default}\n\n` +
+    `<i>"HR has been notified. Well. I am HR. You're fired."</i>\n` +
+    `— Lloyd Frontera`
+  );
+}
+
+function buildWinnerMessage(session, winner) {
+  const payout = winner.stash + session.prizePot;
+  const sorted = [...session.players].sort((a, b) => b.stash - a.stash);
+  const rosterLines = sorted.map((p, i) => {
+    const icon = p.alive ? "✅" : "❌";
+    const isWinner = p.id === winner.id ? " 👑" : "";
+    return `${i + 1}. ${icon} ${escapeHtml(p.name)}${isWinner} — ${p.stash.toLocaleString()} RP`;
+  });
+
+  return (
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🏆 <b>PROJECT COMPLETE — LLOYD'S VERDICT</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `One worker outlasted everyone else.\n` +
+    `Or at least outscammed them.\n\n` +
+    `👷 ${mention(winner.id, winner.name)} wins the Frontera Tender!\n\n` +
+    `💰 <b>TOTAL PAYOUT: ${payout.toLocaleString()} RP</b>\n` +
+    `   ├ Personal stash: ${winner.stash.toLocaleString()} RP\n` +
+    `   └ Prize pot:      ${session.prizePot.toLocaleString()} RP\n\n` +
+    `📊 <b>FINAL ROSTER</b>\n` +
+    `${rosterLines.join("\n")}\n\n` +
+    `<i>"I'd say I'm proud, but I'm mostly relieved.\nFrontera County thanks you for your service."</i>\n` +
+    `— Lloyd Frontera, Chief Development Officer`
+  );
+}
+
+function buildTotalWipeMessage(session) {
+  return (
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `☠️ <b>COMPLETE PROJECT COLLAPSE</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Every single worker has been fired.\n` +
+    `The ${session.prizePot.toLocaleString()} RP prize pot has been... reclaimed.\n` +
+    `<i>(By Lloyd. Obviously.)</i>\n\n` +
+    `<i>"I've never seen this level of collective incompetence.\nIt's almost impressive. Almost."</i>\n` +
+    `— Lloyd Frontera`
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BONUS GAME — CORE LOGIC
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * runBonusRound
+ * Sets up a round: clears choices, sends DMs, starts the 30-second choice window.
+ * The actual settlement is triggered either by the timer or when all players submit.
+ * A "settling" flag prevents double-execution.
+ */
+async function runBonusRound(bot, session) {
+  if (session.finished) return;
+
+  const alive = session.players.filter((p) => p.alive);
+
+  // ── End conditions ─────────────────────────────────────────────────────────
+  if (alive.length <= 1) {
+    return finishBonus(bot, session, alive[0] || null, "sudden");
+  }
+  if (session.round > 5) {
+    const topSurvivor = [...alive].sort((a, b) => b.stash - a.stash)[0] || null;
+    return finishBonus(bot, session, topSurvivor, "score");
+  }
+
+  // ── Round setup ────────────────────────────────────────────────────────────
+  session.choices    = new Map();
+  session.settling   = false;   // guard against double-settle
+  session.roundDmIds = session.roundDmIds || new Map();
+  session.roundDmIds.clear();
+
+  const isLullaby = session.round === 3;
+
+  // ── Group announcement ─────────────────────────────────────────────────────
+  const roundHeader = isLullaby
+    ? `🎵 <b>PHASE ${session.round}: THE LULLABY CONCERT</b>\n\n<i>"I accidentally hired a magical singer.\nJavier insists it wasn't his fault. It was his fault."</i>\n\n👷 Check your DM for your private work order!\n⏳ You have <b>30 seconds</b>.`
+    : `🏗️ <b>PHASE ${session.round}: FRONTERA BONUS TENDER</b>\n\n<i>"Don't tell me what's ethical. Tell me what's profitable."</i>\n\n👷 Check your DM for your private work order!\n⏳ You have <b>30 seconds</b>.`;
+
+  await sendLloydPhoto(bot.telegram, session.chatId, roundHeader);
+
+  // ── Send DM work orders ────────────────────────────────────────────────────
+  const buttons = isLullaby
+    ? Markup.inlineKeyboard([
+        [Markup.button.callback("🛡️ Buy Earplugs", `bonus:choice:${session.id}:earplugs`)],
+        [Markup.button.callback("😤 Endure",       `bonus:choice:${session.id}:endure`)],
+        [Markup.button.callback("💢 Push",          `bonus:choice:${session.id}:push`)]
+      ])
+    : Markup.inlineKeyboard([
+        [Markup.button.callback("⚖️ Share the Contract", `bonus:choice:${session.id}:share`)],
+        [Markup.button.callback("🪙 Embezzle the Funds",  `bonus:choice:${session.id}:embezzle`)],
+        [Markup.button.callback("📢 Snitch to Inspector", `bonus:choice:${session.id}:snitch`)]
+      ]);
+
+  for (const player of alive) {
+    try {
+      const caption = buildRoundDmCaption(player, session, isLullaby, 30);
+      const imagePath = getRandomLloydImage();
+      let dmMsg = null;
+
+      if (imagePath) {
+        const cachedId = getCachedFileId(imagePath);
+        try {
+          if (cachedId) {
+            dmMsg = await bot.telegram.sendPhoto(player.id, cachedId, {
+              caption, parse_mode: "HTML", ...buttons
+            });
+          } else {
+            dmMsg = await bot.telegram.sendPhoto(player.id, { source: imagePath }, {
+              caption, parse_mode: "HTML", ...buttons
+            });
+            const fileId = dmMsg?.photo?.at(-1)?.file_id;
+            if (fileId) setCachedFileId(imagePath, fileId);
+          }
+        } catch (_photoErr) {
+          dmMsg = await bot.telegram.sendMessage(player.id, caption, {
+            parse_mode: "HTML", ...buttons
+          });
+        }
+      } else {
+        dmMsg = await bot.telegram.sendMessage(player.id, caption, {
+          parse_mode: "HTML", ...buttons
+        });
+      }
+
+      if (dmMsg) session.roundDmIds.set(player.id, dmMsg.message_id);
+    } catch (_dmErr) {
+      // Can't DM this player — apply default silently
+      const defaultChoice = isLullaby ? "endure" : "share";
+      session.choices.set(player.id, defaultChoice);
+      await bot.telegram.sendMessage(
+        session.chatId,
+        `📭 <b>${escapeHtml(player.name)}</b> didn't open their work order. Default choice applied.`,
+        { parse_mode: "HTML" }
+      ).catch(() => {});
+    }
+    await sleep(120); // Telegram rate-limit buffer
+  }
+
+  // ── Live DM timer: edit each DM every 5 s with updated countdown ───────────
+  const choiceWindowStart = Date.now();
+  const timerIntervalId = setInterval(async () => {
+    const elapsed = Date.now() - choiceWindowStart;
+    const remaining = Math.max(0, Math.ceil((ROUND_CHOICE_WINDOW_MS - elapsed) / 1000));
+
+    for (const player of alive) {
+      // Skip if player already submitted
+      if (session.choices.has(player.id)) continue;
+      const dmMsgId = session.roundDmIds.get(player.id);
+      if (!dmMsgId) continue;
+      try {
+        const updatedCaption = buildRoundDmCaption(player, session, isLullaby, remaining);
+        await bot.telegram.editMessageCaption(player.id, dmMsgId, undefined, updatedCaption, {
+          parse_mode: "HTML",
+          ...buttons
+        });
+      } catch (_) {}
+    }
+  }, 5000);
+
+  // Store interval id so we can clear it on early settlement
+  session.choiceTimerIntervalId = timerIntervalId;
+
+  // ── Mid-round Lloyd quote (at 15 s) ───────────────────────────────────────
+  session.lloydQuoteTimeoutId = setTimeout(async () => {
+    if (session.finished || session.settling) return;
+    const quote = getLloydQuote();
+    await sendLloydPhoto(
+      bot.telegram,
+      session.chatId,
+      `<i>"${quote}"</i>\n\n— <b>Lloyd Frontera</b>\n<i>Frontera County Development Bureau</i>`
+    );
+  }, LLOYD_QUOTE_AT_MS);
+
+  // ── Main settlement timer (fires after 30 s) ──────────────────────────────
+  session.settlementTimeoutId = setTimeout(() => {
+    triggerSettle(bot, session);
+  }, ROUND_CHOICE_WINDOW_MS);
+}
+
+/**
+ * triggerSettle — idempotent entry point for settlement.
+ * Called either by the 30-second timer OR by the callback handler when all
+ * players have submitted. Clears pending timers and runs settleBonusRound once.
+ */
+function triggerSettle(bot, session) {
+  if (session.finished || session.settling) return;
+  session.settling = true;
+
+  // Cancel pending timers to prevent any duplicate execution
+  if (session.settlementTimeoutId) {
+    clearTimeout(session.settlementTimeoutId);
+    session.settlementTimeoutId = null;
+  }
+  if (session.choiceTimerIntervalId) {
+    clearInterval(session.choiceTimerIntervalId);
+    session.choiceTimerIntervalId = null;
+  }
+  if (session.lloydQuoteTimeoutId) {
+    clearTimeout(session.lloydQuoteTimeoutId);
+    session.lloydQuoteTimeoutId = null;
+  }
+
+  settleBonusRound(bot, session).catch((err) => {
+    console.error("settleBonusRound error:", err);
+  });
+}
+
+/**
+ * settleBonusRound — resolves the current round, runs the 50-second reveal
+ * sequence, then advances to the next round.
+ */
+async function settleBonusRound(bot, session) {
+  const telegram = bot.telegram;
+  const alive = session.players.filter((p) => p.alive);
+  const isLullaby = session.round === 3;
+  const roundNum = session.round; // capture before increment
+
+  // ── Step 1 (0 s): Choices revealed ────────────────────────────────────────
+  const sortedAlive = [...alive].sort((a, b) => a.name.localeCompare(b.name));
+  const choicesLines = [`📋 <b>PHASE ${roundNum} — WORK ORDERS REVEALED</b>\n`];
+  for (const player of sortedAlive) {
+    const choice   = session.choices.get(player.id) || (isLullaby ? "endure" : "share");
+    const emoji    = getChoiceEmoji(choice);
+    const label    = getChoiceLabel(choice);
+    const isDefault = !session.choices.has(player.id);
+    choicesLines.push(`${emoji} <b>${escapeHtml(player.name)}</b> → ${label}${isDefault ? " <i>(default)</i>" : ""}`);
+  }
+  await telegram.sendMessage(session.chatId, choicesLines.join("\n"), { parse_mode: "HTML" }).catch(() => {});
+
+  // ── Step 2 (7 s): Apply damage / stash changes ────────────────────────────
+  await sleep(7000);
+
+  /** Track per-player elimination causes for drama messages */
+  const eliminationCauses = new Map();
+
+  if (isLullaby) {
+    // Resolve earplugs first (must know who is shielded before processing pushes)
+    const shielded = new Set();
+    for (const player of alive) {
+      if ((session.choices.get(player.id) || "endure") === "earplugs") {
+        if (player.stash >= 300) {
+          player.stash -= 300;
+          shielded.add(player.id);
+        } else {
+          // Can't afford — treat as endure
+          session.choices.set(player.id, "endure");
+        }
+      }
+    }
+
+    for (const player of alive) {
+      const choice = session.choices.get(player.id) || "endure";
+      if (choice === "earplugs") continue; // handled above
+      if (choice === "endure") {
+        player.hp -= 50;
+        if (player.hp <= 0) eliminationCauses.set(player.id, "endure_fatal");
+      } else if (choice === "push") {
+        const targets = alive.filter((p) => p.id !== player.id && p.alive);
+        if (!targets.length) {
+          player.hp -= 50;
+          if (player.hp <= 0) eliminationCauses.set(player.id, "push_no_target");
+        } else {
+          const target = targets[Math.floor(Math.random() * targets.length)];
+          if (shielded.has(target.id)) {
+            player.hp = 0;
+            eliminationCauses.set(player.id, "push_backfire");
+          } else {
+            target.hp = 0;
+            eliminationCauses.set(target.id, "push_backfire");
+          }
+        }
+      }
+    }
+  } else {
+    const choices    = alive.map((p) => ({ player: p, choice: session.choices.get(p.id) || "share" }));
+    const embezzlers = choices.filter((c) => c.choice === "embezzle");
+    const snitches   = choices.filter((c) => c.choice === "snitch");
+
+    if (!embezzlers.length && !snitches.length) {
+      // All share
+      const share = alive.length > 0 ? Math.floor(1000 / alive.length) : 0;
+      alive.forEach((p) => (p.stash += share));
+    } else if (embezzlers.length === 1 && !snitches.length) {
+      embezzlers[0].player.stash += 1000;
+    } else if (embezzlers.length > 1 && !snitches.length) {
+      embezzlers.forEach(({ player }) => {
+        player.hp -= 30;
+        if (player.hp <= 0) eliminationCauses.set(player.id, "embezzle_collision");
+      });
+    } else if (embezzlers.length && snitches.length) {
+      embezzlers.forEach(({ player }) => {
+        player.hp -= 60;
+        if (player.hp <= 0) eliminationCauses.set(player.id, "snitch_caught");
+      });
+      snitches.forEach(({ player }) => (player.stash += 500));
+    }
+    // Only snitches, no embezzlers: no change
+  }
+
+  // ── Step 3 (14 s): Outcome message ────────────────────────────────────────
+  await sleep(7000);
+  const outcomeMsg = buildOutcomeLines(session, alive, isLullaby);
+  await telegram.sendMessage(session.chatId, outcomeMsg, { parse_mode: "HTML" }).catch(() => {});
+
+  // ── Step 4 (21 s): Process eliminations + drama messages ──────────────────
+  await sleep(7000);
+  for (const player of alive) {
+    if (player.hp <= 0 && player.alive) {
+      player.alive = false;
+      const cause = eliminationCauses.get(player.id) || "default";
+      await telegram.sendMessage(session.chatId, buildEliminationMessage(player, cause), {
+        parse_mode: "HTML"
+      }).catch(() => {});
+      // DM the eliminated player
+      await telegram.sendMessage(
+        player.id,
+        `🔨 <b>You've been fired</b> from Lloyd's work site.\n` +
+        `Your stash of <b>${player.stash.toLocaleString()} RP</b> has been forfeited.\n\n` +
+        `<i>Javier sends his condolences. The hamster does not.</i>`,
+        { parse_mode: "HTML" }
+      ).catch(() => {});
+      // Update DB
+      User.findOne({ telegramId: player.id }).then((u) => {
+        if (u) {
+          u.bonusEliminations = (u.bonusEliminations || 0) + 1;
+          u.save().catch(() => {});
+        }
+      }).catch(() => {});
+    }
+  }
+
+  // ── Step 5 (28 s): Standings ───────────────────────────────────────────────
+  await sleep(7000);
+  await telegram.sendMessage(session.chatId, buildStandingsMessage(session, roundNum), {
+    parse_mode: "HTML"
+  }).catch(() => {});
+
+  // ── Step 6 (35 s): Lloyd mid-reveal photo ─────────────────────────────────
+  await sleep(7000);
+  const quote = getLloydQuote();
+  await sendLloydPhoto(
+    telegram,
+    session.chatId,
+    `<i>"${quote}"</i>\n\n— <b>Lloyd Frontera</b>`
+  );
+
+  // ── Step 7 (43 s): Countdown to next phase ────────────────────────────────
+  await sleep(8000);
+  const nextRound = roundNum + 1;
+  const stillAlive = session.players.filter((p) => p.alive);
+
+  // Check end conditions before announcing next round
+  if (stillAlive.length <= 1 || nextRound > 5) {
+    // Will be handled by runBonusRound's end-condition check — advance and call
+    session.round = nextRound;
+    return runBonusRound(bot, session);
+  }
+
+  let countdownMsg = null;
+  try {
+    countdownMsg = await telegram.sendMessage(
+      session.chatId,
+      `🏗️ <b>Phase ${nextRound} begins in 5...</b>`,
+      { parse_mode: "HTML" }
+    );
+  } catch (_) {}
+
+  for (let i = 4; i >= 1; i--) {
+    await sleep(1000);
+    if (countdownMsg) {
+      await telegram.editMessageText(
+        session.chatId,
+        countdownMsg.message_id,
+        undefined,
+        `🏗️ <b>Phase ${nextRound} begins in ${i}...</b>`,
+        { parse_mode: "HTML" }
+      ).catch(() => {});
+    }
+  }
+
+  // ── Step 8 (50 s): Advance to next round ──────────────────────────────────
+  await sleep(1000);
+  session.round = nextRound;
+  runBonusRound(bot, session);
+}
+
+/**
+ * finishBonus — game over, pay out, update DB, announce result.
+ */
+async function finishBonus(bot, session, suddenWinner, mode) {
+  if (session.finished) return;
+  session.finished = true;
+
+  // Cancel any outstanding timers
+  if (session.settlementTimeoutId)  clearTimeout(session.settlementTimeoutId);
+  if (session.choiceTimerIntervalId) clearInterval(session.choiceTimerIntervalId);
+  if (session.lloydQuoteTimeoutId)  clearTimeout(session.lloydQuoteTimeoutId);
+  if (session.timer)                clearInterval(session.timer); // lobby timer
+
+  bonusSessions.delete(session.id);
+
+  const survivors = session.players.filter((p) => p.alive);
+  let winner = suddenWinner;
+  if (!winner && mode === "score" && survivors.length) {
+    winner = [...survivors].sort((a, b) => b.stash - a.stash)[0];
+  }
+
+  const caption = winner ? buildWinnerMessage(session, winner) : buildTotalWipeMessage(session);
+  await sendLloydPhoto(bot.telegram, session.chatId, caption);
+
+  // ── DB updates ─────────────────────────────────────────────────────────────
+  for (const player of session.players) {
+    try {
+      const user = await User.findOne({ telegramId: player.id });
+      if (!user) continue;
+
+      user.bonusGamesPlayed = (user.bonusGamesPlayed || 0) + 1;
+
+      if (winner && player.id === winner.id) {
+        const payout = winner.stash + session.prizePot;
+        setRp(user, getRp(user) + payout);
+        user.bonusWins = (user.bonusWins || 0) + 1;
+      } else {
+        // Survivors (non-winner) keep their stash
+        if (player.alive && player.stash > 0) {
+          setRp(user, getRp(user) + player.stash);
+        }
+        user.bonusLosses = (user.bonusLosses || 0) + 1;
+      }
+
+      await user.save();
+    } catch (err) {
+      console.error(`finishBonus DB error for player ${player.id}:`, err.message);
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMMAND REGISTRATION
+// ══════════════════════════════════════════════════════════════════════════════
 export function estateCommand(bot) {
   bot.command("stats", async (ctx) => {
     return ctx.reply("Use /profile for the Frontera personnel ledger or /rank for the estate ledger.", {
@@ -1259,34 +1283,32 @@ export function estateCommand(bot) {
     const counts = tierBreakdown(workers);
     const games = (user.bonusWins || 0) + (user.bonusLosses || 0);
     const production = workers
-      .filter((worker) => worker.alive !== false)
-      .reduce((sum, worker) => sum + (WORKER_RP[worker.level] || 0), 0);
+      .filter((w) => w.alive !== false)
+      .reduce((sum, w) => sum + (WORKER_RP[w.level] || 0), 0);
     const nextRank = [...RANKS].reverse().find(([, required]) => required > getRp(user));
-    const nextRankText = nextRank
-      ? `${nextRank[0]} at ${nextRank[1].toLocaleString()} RP`
-      : "Estate ceiling reached";
+    const nextRankText = nextRank ? `${nextRank[0]} at ${nextRank[1].toLocaleString()} RP` : "Estate ceiling reached";
     await user.save();
 
     return ctx.reply(
       `<b>Frontera Estate Ledger</b>\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `<b>Owner</b>\n` +
-        `Name: ${mention(ctx.from.id, ctx.from.first_name)}\n` +
-        `Username: ${ctx.from.username ? `@${escapeHtml(ctx.from.username)}` : "Not set"}\n\n` +
-        `<b>Wealth & Rank</b>\n` +
-        `RP Balance: <b>${getRp(user).toLocaleString()} RP</b>\n` +
-        `Rank Tier: <b>${rankForRp(getRp(user))}</b>\n` +
-        `Next Promotion: <b>${nextRankText}</b>\n` +
-        `HP: <b>${Math.max(0, user.hp || MAX_HP)}/100</b>\n\n` +
-        `<b>Labour Force</b>\n` +
-        `Total Labourers: <b>${workers.length}</b>\n` +
-        `${tierBall("LOW")} Low: <b>${counts.LOW}</b> | ${tierBall("MID")} Mid: <b>${counts.MID}</b> | ${tierBall("TOP")} Top: <b>${counts.TOP}</b>\n` +
-        `${tierBall("LEGEND")} Legend: <b>${counts.LEGEND}</b> | ${tierBall("ULTRA")} Ultra: <b>${counts.ULTRA}</b>\n` +
-        `Passive Production: <b>${production} RP/hr</b>\n` +
-        `Morale: <b>${user.workerMorale ?? 100}/100</b>\n\n` +
-        `<b>Frontera Bonus Record</b>\n` +
-        `Wins: <b>${user.bonusWins || 0}</b> | Losses: <b>${user.bonusLosses || 0}</b> | Played: <b>${games}</b>\n\n` +
-        `<i>Lloyd: "A good estate begins with a brutally honest balance sheet. Mostly brutal."</i>`,
+      `━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `<b>Owner</b>\n` +
+      `Name: ${mention(ctx.from.id, ctx.from.first_name)}\n` +
+      `Username: ${ctx.from.username ? `@${escapeHtml(ctx.from.username)}` : "Not set"}\n\n` +
+      `<b>Wealth & Rank</b>\n` +
+      `RP Balance: <b>${getRp(user).toLocaleString()} RP</b>\n` +
+      `Rank Tier: <b>${rankForRp(getRp(user))}</b>\n` +
+      `Next Promotion: <b>${nextRankText}</b>\n` +
+      `HP: <b>${Math.max(0, user.hp || MAX_HP)}/100</b>\n\n` +
+      `<b>Labour Force</b>\n` +
+      `Total Labourers: <b>${workers.length}</b>\n` +
+      `${tierBall("LOW")} Low: <b>${counts.LOW}</b> | ${tierBall("MID")} Mid: <b>${counts.MID}</b> | ${tierBall("TOP")} Top: <b>${counts.TOP}</b>\n` +
+      `${tierBall("LEGEND")} Legend: <b>${counts.LEGEND}</b> | ${tierBall("ULTRA")} Ultra: <b>${counts.ULTRA}</b>\n` +
+      `Passive Production: <b>${production} RP/hr</b>\n` +
+      `Morale: <b>${user.workerMorale ?? 100}/100</b>\n\n` +
+      `<b>Frontera Bonus Record</b>\n` +
+      `Wins: <b>${user.bonusWins || 0}</b> | Losses: <b>${user.bonusLosses || 0}</b> | Played: <b>${games}</b>\n\n` +
+      `<i>Lloyd: "A good estate begins with a brutally honest balance sheet. Mostly brutal."</i>`,
       { parse_mode: "HTML", reply_to_message_id: ctx.message?.message_id }
     );
   });
@@ -1294,23 +1316,20 @@ export function estateCommand(bot) {
   bot.command("collect", async (ctx) => {
     const user = await ensureEstateUser(ctx.from);
     if ((user.workerMorale || 0) <= 0) {
-      return ctx.reply(`Your workers are on strike. Use /lullaby first.`, { reply_to_message_id: ctx.message?.message_id });
+      return ctx.reply("Your workers are on strike. Use /lullaby first.", { reply_to_message_id: ctx.message?.message_id });
     }
-
     const now = nowSeconds();
     const elapsedHours = Math.min(24, Math.max(0, (now - (user.lastCollectedAt || now)) / 3600));
     const production = normalizeWorkers(user)
-      .filter((worker) => worker.alive !== false)
-      .reduce((sum, worker) => sum + (WORKER_RP[worker.level] || 0), 0);
+      .filter((w) => w.alive !== false)
+      .reduce((sum, w) => sum + (WORKER_RP[w.level] || 0), 0);
     const earned = Math.floor(elapsedHours * production);
-
     setRp(user, getRp(user) + earned);
     user.lastCollectedAt = now;
     await user.save();
-
     return ctx.reply(
       `You've collected ${earned.toLocaleString()} RP from your estate. Don't spend it all in one place.\n\n` +
-        `Production rate: ${production} RP/hr | Stored time: ${elapsedHours.toFixed(1)}h`,
+      `Production rate: ${production} RP/hr | Stored time: ${elapsedHours.toFixed(1)}h`,
       { reply_to_message_id: ctx.message?.message_id }
     );
   });
@@ -1318,29 +1337,31 @@ export function estateCommand(bot) {
   bot.command("lullaby", async (ctx) => {
     const user = await ensureEstateUser(ctx.from);
     if ((user.workerMorale || 100) === 100) {
-      return ctx.reply(`Your workers are already terrified enough. They're working fine.`, { reply_to_message_id: ctx.message?.message_id });
+      return ctx.reply("Your workers are already terrified enough. They're working fine.", { reply_to_message_id: ctx.message?.message_id });
     }
     user.workerMorale = 100;
     user.lastCollectedAt = nowSeconds();
     await user.save();
-    return ctx.reply(`Lloyd sings one note. The estate freezes. By the second note, every worker is back at their post out of pure fear. Morale restored to 100.`, { reply_to_message_id: ctx.message?.message_id });
+    return ctx.reply(
+      "Lloyd sings one note. The estate freezes. By the second note, every worker is back at their post out of pure fear. Morale restored to 100.",
+      { reply_to_message_id: ctx.message?.message_id }
+    );
   });
 
   bot.command("gg", async (ctx) => {
     const user = await ensureEstateUser(ctx.from);
     const top = await User.find({ bonusWins: { $gt: 0 } }).sort({ bonusWins: -1, rp: -1 }).limit(5);
     const board = top.length
-      ? top.map((u, i) => `${i + 1}. ${escapeHtml(u.firstName || "Worker")} - ${u.bonusWins || 0} wins`).join("\n")
+      ? top.map((u, i) => `${i + 1}. ${escapeHtml(u.firstName || "Worker")} — ${u.bonusWins || 0} wins`).join("\n")
       : "No winners yet.";
-
     return ctx.reply(
       `<b>Game Ledger</b>\n\n` +
-        `Total Games Played: <b>${user.bonusGamesPlayed || 0}</b>\n` +
-        `Games Won: <b>${user.bonusWins || 0}</b>\n` +
-        `Times Fired / Eliminated: <b>${user.bonusEliminations || 0}</b>\n` +
-        `Total RP Stolen: <b>${(user.totalRpStolen || 0).toLocaleString()} RP</b>\n` +
-        `Favorite Tactic: <b>${favoriteTactic(user)}</b>\n\n` +
-        `<b>Server Top 5</b>\n${board}`,
+      `Total Games Played: <b>${user.bonusGamesPlayed || 0}</b>\n` +
+      `Games Won: <b>${user.bonusWins || 0}</b>\n` +
+      `Times Fired / Eliminated: <b>${user.bonusEliminations || 0}</b>\n` +
+      `Total RP Stolen: <b>${(user.totalRpStolen || 0).toLocaleString()} RP</b>\n` +
+      `Favorite Tactic: <b>${favoriteTactic(user)}</b>\n\n` +
+      `<b>Server Top 5</b>\n${board}`,
       { parse_mode: "HTML", reply_to_message_id: ctx.message?.message_id }
     );
   });
@@ -1350,21 +1371,19 @@ export function estateCommand(bot) {
     const topUsers = await User.find({
       shadows: { $exists: true, $ne: [] },
       totalStars: { $gt: 0 }
-    })
-      .sort({ totalStars: -1, totalPower: -1, rp: -1 })
-      .limit(10);
+    }).sort({ totalStars: -1, totalPower: -1, rp: -1 }).limit(10);
 
     const callerWorkers = normalizeWorkers(caller);
     const callerProduction = callerWorkers
-      .filter((worker) => worker.alive !== false)
-      .reduce((sum, worker) => sum + (WORKER_RP[worker.level] || 0), 0);
+      .filter((w) => w.alive !== false)
+      .reduce((sum, w) => sum + (WORKER_RP[w.level] || 0), 0);
 
     const rows = topUsers.length
       ? topUsers.map((user, index) => {
           const workers = normalizeWorkers(user);
           const production = workers
-            .filter((worker) => worker.alive !== false)
-            .reduce((sum, worker) => sum + (WORKER_RP[worker.level] || 0), 0);
+            .filter((w) => w.alive !== false)
+            .reduce((sum, w) => sum + (WORKER_RP[w.level] || 0), 0);
           const name = user.telegramId === ctx.from.id
             ? mention(user.telegramId, user.firstName || ctx.from.first_name)
             : `<b>${escapeHtml(user.firstName || "Unnamed Baron")}</b>`;
@@ -1373,40 +1392,34 @@ export function estateCommand(bot) {
       : "No labour forces have been registered yet.";
 
     await caller.save();
-
     return ctx.reply(
       `<b>Frontera Labour Rankings</b>\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `<i>Ranked by total worker stars, power, and estate value.</i>\n\n` +
-        `${rows}\n\n` +
-        `<b>Your Workforce</b>\n` +
-        `Labourers: <b>${callerWorkers.length}</b>\n` +
-        `Total Stars: <b>${caller.totalStars || 0}</b>\n` +
-        `Production: <b>${callerProduction} RP/hr</b>\n\n` +
-        `<i>Lloyd: "A leaderboard is just a public invoice for everyone's inadequacy."</i>`,
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `<i>Ranked by total worker stars, power, and estate value.</i>\n\n` +
+      `${rows}\n\n` +
+      `<b>Your Workforce</b>\n` +
+      `Labourers: <b>${callerWorkers.length}</b>\n` +
+      `Total Stars: <b>${caller.totalStars || 0}</b>\n` +
+      `Production: <b>${callerProduction} RP/hr</b>\n\n` +
+      `<i>Lloyd: "A leaderboard is just a public invoice for everyone's inadequacy."</i>`,
       { parse_mode: "HTML", reply_to_message_id: ctx.message?.message_id }
     );
   });
 
   bot.command("topw", async (ctx) => {
-    const topUsers = await User.find({
-      shadows: { $exists: true, $ne: [] }
-    }).limit(50);
-
+    const topUsers = await User.find({ shadows: { $exists: true, $ne: [] } }).limit(50);
     const ranked = topUsers
       .map((user) => {
         const workers = normalizeWorkers(user);
-        const score = workers.reduce((sum, worker) => sum + (TIER_ORDER[worker.level] || 0), 0);
-        const production = workers.reduce((sum, worker) => sum + (WORKER_RP[worker.level] || 0), 0);
+        const score = workers.reduce((sum, w) => sum + (TIER_ORDER[w.level] || 0), 0);
+        const production = workers.reduce((sum, w) => sum + (WORKER_RP[w.level] || 0), 0);
         return { user, workers, score, production };
       })
       .sort((a, b) => b.score - a.score || b.workers.length - a.workers.length || getRp(b.user) - getRp(a.user))
       .slice(0, 10);
 
     if (!ranked.length) {
-      return ctx.reply("No labour ledgers exist yet. Lloyd cannot rank empty payroll.", {
-        reply_to_message_id: ctx.message?.message_id
-      });
+      return ctx.reply("No labour ledgers exist yet. Lloyd cannot rank empty payroll.", { reply_to_message_id: ctx.message?.message_id });
     }
 
     const rows = ranked.map((entry, index) => {
@@ -1414,17 +1427,17 @@ export function estateCommand(bot) {
       const counts = tierBreakdown(entry.workers);
       return (
         `<b>${index + 1}.</b> ${name}\n` +
-        `Workers: <b>${entry.workers.length}</b> | Worker Level Score: <b>${entry.score}</b> | Output: <b>${entry.production} RP/hr</b>\n` +
+        `Workers: <b>${entry.workers.length}</b> | Score: <b>${entry.score}</b> | Output: <b>${entry.production} RP/hr</b>\n` +
         `${tierBall("LOW")} ${counts.LOW}  ${tierBall("MID")} ${counts.MID}  ${tierBall("TOP")} ${counts.TOP}  ${tierBall("LEGEND")} ${counts.LEGEND}  ${tierBall("ULTRA")} ${counts.ULTRA}`
       );
     }).join("\n\n");
 
     return ctx.reply(
       `<b>Frontera Top Workers</b>\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `<i>Ranked by total worker level score. Low=1, Mid=2, Top=3, Legend=4, Ultra=5.</i>\n\n` +
-        `${rows}\n\n` +
-        `<i>Lloyd: "A strong workforce is not luck. It is payroll with ambition."</i>`,
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `<i>Ranked by total worker level score. Low=1, Mid=2, Top=3, Legend=4, Ultra=5.</i>\n\n` +
+      `${rows}\n\n` +
+      `<i>Lloyd: "A strong workforce is not luck. It is payroll with ambition."</i>`,
       { parse_mode: "HTML", reply_to_message_id: ctx.message?.message_id }
     );
   });
@@ -1436,7 +1449,6 @@ export function estateCommand(bot) {
     if (!(await hasMinMembers(ctx, 20))) {
       return ctx.reply("Javier refuses small rooms. Bring him a group with 20+ members.", { reply_to_message_id: ctx.message?.message_id });
     }
-
     const user = await ensureEstateUser(ctx.from);
     const now = nowSeconds();
     if ((user.javierCooldownUntil || 0) > now) {
@@ -1445,12 +1457,13 @@ export function estateCommand(bot) {
     if ((user.javierProtectionUntil || 0) > now) {
       return ctx.reply("Javier is already guarding you. Are you that paranoid?", { reply_to_message_id: ctx.message?.message_id });
     }
-
     const hours = Math.floor(Math.random() * 9) + 2;
     user.javierProtectionUntil = now + hours * 3600;
     user.immuneUntil = user.javierProtectionUntil;
     await user.save();
-    return ctx.reply(`Javier stands beside you, eyes scanning the crowd. Nobody dares to move.\n\nProtection: ${hours} hours.`, { reply_to_message_id: ctx.message?.message_id });
+    return ctx.reply(`Javier stands beside you, eyes scanning the crowd. Nobody dares to move.\n\nProtection: ${hours} hours.`, {
+      reply_to_message_id: ctx.message?.message_id
+    });
   });
 
   bot.command("unleash", async (ctx) => {
@@ -1465,28 +1478,28 @@ export function estateCommand(bot) {
     user.javierCooldownUntil = now + minutes * 60;
     user.immuneCooldownUntil = user.javierCooldownUntil;
     await user.save();
-    return ctx.reply(`Javier steps aside. You are now vulnerable. Choose your battles wisely.\n\n/javier cooldown: ${minutes} minutes.`, { reply_to_message_id: ctx.message?.message_id });
+    return ctx.reply(`Javier steps aside. You are now vulnerable. Choose your battles wisely.\n\n/javier cooldown: ${minutes} minutes.`, {
+      reply_to_message_id: ctx.message?.message_id
+    });
   });
 
   bot.command("worker", async (ctx) => {
     const user = await ensureEstateUser(ctx.from);
     const now = nowSeconds();
     if (now - (user.lastAriseAt || 0) < WORKER_COOLDOWN) {
-      return ctx.reply(`Lloyd's hiring desk is cooling down. Come back in ${formatTime(WORKER_COOLDOWN - (now - user.lastAriseAt))}.`, { reply_to_message_id: ctx.message?.message_id });
+      return ctx.reply(`Lloyd's hiring desk is cooling down. Come back in ${formatTime(WORKER_COOLDOWN - (now - user.lastAriseAt))}.`, {
+        reply_to_message_id: ctx.message?.message_id
+      });
     }
     if (Math.random() * 100 < 25) {
       user.lastAriseAt = now;
       await user.save();
-      const caption = `The recruitment pit is empty. Lloyd bills you for the paperwork anyway.`;
+      const caption = "The recruitment pit is empty. Lloyd bills you for the paperwork anyway.";
       const imagePath = randomLloydImage();
-      if (!imagePath) {
-        return ctx.reply(caption, { reply_to_message_id: ctx.message?.message_id });
-      }
+      if (!imagePath) return ctx.reply(caption, { reply_to_message_id: ctx.message?.message_id });
       try {
-        const sent = await ctx.replyWithPhoto({ source: imagePath }, { caption, reply_to_message_id: ctx.message?.message_id });
-        return sent;
+        return await ctx.replyWithPhoto({ source: imagePath }, { caption, reply_to_message_id: ctx.message?.message_id });
       } catch (err) {
-        console.error('Failed to send Lloyd image for empty recruitment:', err);
         return ctx.reply(caption, { reply_to_message_id: ctx.message?.message_id });
       }
     }
@@ -1506,21 +1519,16 @@ export function estateCommand(bot) {
     };
     user.shadows.push(worker);
     const workerIndex = user.shadows.length - 1;
-    user.totalStars = (user.totalStars || 0) + worker.stars;
-    user.totalPower = (user.totalPower || 0) + worker.power;
+    user.totalStars  = (user.totalStars || 0) + worker.stars;
+    user.totalPower  = (user.totalPower || 0) + worker.power;
     user.lastAriseAt = now;
     await user.save();
 
     const caption = workerContractCaption(worker, user);
-
     try {
       const sent = await ctx.replyWithPhoto(
         { source: imagePath },
-        {
-          caption,
-          parse_mode: "HTML",
-          reply_to_message_id: ctx.message?.message_id
-        }
+        { caption, parse_mode: "HTML", reply_to_message_id: ctx.message?.message_id }
       );
       const fileId = sent?.photo?.at(-1)?.file_id;
       if (fileId) {
@@ -1544,20 +1552,17 @@ export function estateCommand(bot) {
     if (!workers.length) return ctx.reply("You have no workers, Baron. Use /worker to summon your first one.", { reply_to_message_id: ctx.message?.message_id });
     const id = `${ctx.from.id}:${Date.now().toString(36)}`;
     gallerySessions.set(id, { userId: ctx.from.id, page: 0 });
-
     return ctx.reply(
       `<b>Frontera Labour Archive</b>\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `Labourers Registered: <b>${workers.length}</b>\n` +
-        `Unique Contracts: <b>${new Set(workers.map((worker) => `${worker.level}:${worker.name}`)).size}</b>\n\n` +
-        `Press <b>Explore</b> to open your worker portraits in Telegram's inline picker. Tap a portrait to send its full contract card.\n\n` +
-        `<i>Lloyd: "Do not stare for free. Every portrait is an asset."</i>`,
+      `━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `Labourers Registered: <b>${workers.length}</b>\n` +
+      `Unique Contracts: <b>${new Set(workers.map((w) => `${w.level}:${w.name}`)).size}</b>\n\n` +
+      `Press <b>Explore</b> to open your worker portraits in Telegram's inline picker. Tap a portrait to send its full contract card.\n\n` +
+      `<i>Lloyd: "Do not stare for free. Every portrait is an asset."</i>`,
       {
         parse_mode: "HTML",
         reply_to_message_id: ctx.message?.message_id,
-        ...Markup.inlineKeyboard([
-          Markup.button.switchToCurrentChat("Explore", `workers ${ctx.from.id}`)
-        ])
+        ...Markup.inlineKeyboard([Markup.button.switchToCurrentChat("Explore", `workers ${ctx.from.id}`)])
       }
     );
   });
@@ -1589,7 +1594,7 @@ export function estateCommand(bot) {
     if (targetTelegram.is_bot || targetTelegram.id === ctx.from.id) return ctx.reply("Lloyd rejects that target as bad accounting.", { reply_to_message_id: ctx.message?.message_id });
 
     const attacker = await ensureEstateUser(ctx.from);
-    const target = await User.findOne({ telegramId: targetTelegram.id });
+    const target   = await User.findOne({ telegramId: targetTelegram.id });
     if (!target?.estateStarted) return ctx.reply("Target must use /start first.", { reply_to_message_id: ctx.message?.message_id });
 
     const now = nowSeconds();
@@ -1599,10 +1604,10 @@ export function estateCommand(bot) {
 
     const damage = Math.floor(Math.random() * 10) + 6;
     target.hp = Math.max(0, (target.hp || MAX_HP) - damage);
-    attacker.lastTatakaeAt = now;
-    attacker.totalAttacks = (attacker.totalAttacks || 0) + 1;
+    attacker.lastTatakaeAt   = now;
+    attacker.totalAttacks    = (attacker.totalAttacks || 0) + 1;
     if (target.hp <= 0) {
-      target.defeatedAt = now;
+      target.defeatedAt         = now;
       target.healthRestoreDueAt = now + 10 * 60 * 60;
       attacker.successfulAttacks = (attacker.successfulAttacks || 0) + 1;
     }
@@ -1653,15 +1658,23 @@ export function estateCommand(bot) {
       {
         parse_mode: "HTML",
         reply_to_message_id: ctx.message?.message_id,
-        ...Markup.inlineKeyboard(options.map(({ worker, index }) => [Markup.button.callback(`${worker.name} (${worker.level})`, `scam:aw:${id}:${index}`)]))
+        ...Markup.inlineKeyboard(options.map(({ worker, index }) => [
+          Markup.button.callback(`${worker.name} (${worker.level})`, `scam:aw:${id}:${index}`)
+        ]))
       }
     );
   });
 
+  // ── /bonus ─────────────────────────────────────────────────────────────────
   bot.command("bonus", async (ctx) => {
-    if (!ctx.chat || ctx.chat.type === "private") return ctx.reply("The Frontera Bonus is group only.", { reply_to_message_id: ctx.message?.message_id });
-    const existing = [...bonusSessions.values()].find((session) => session.chatId === ctx.chat.id && !session.finished);
-    if (existing) return ctx.reply("A Frontera Bonus lobby is already open here.", { reply_to_message_id: ctx.message?.message_id });
+    if (!ctx.chat || ctx.chat.type === "private") {
+      return ctx.reply("The Frontera Bonus is group only.", { reply_to_message_id: ctx.message?.message_id });
+    }
+    const existing = [...bonusSessions.values()].find((s) => s.chatId === ctx.chat.id && !s.finished);
+    if (existing) {
+      return ctx.reply("A Frontera Bonus lobby is already open here.", { reply_to_message_id: ctx.message?.message_id });
+    }
+
     const id = Date.now().toString(36);
     const session = {
       id,
@@ -1671,107 +1684,140 @@ export function estateCommand(bot) {
       round: 1,
       choices: new Map(),
       finished: false,
+      settling: false,
       timer: null,
       lobbyMessageId: null,
-      roundDmIds: new Map() // Map<playerId, messageId>
+      roundDmIds: new Map(),
+      // Timer handles
+      settlementTimeoutId: null,
+      choiceTimerIntervalId: null,
+      lloydQuoteTimeoutId: null
     };
     bonusSessions.set(id, session);
 
-    // Send intro image
-    const introCaption = buildIntroCaption();
+    // ── Send lobby intro with Lloyd photo ──────────────────────────────────
+    const introCaption = buildIntroCaption(30, 0, 0, []);
     let introMsg = null;
+    try {
+      introMsg = await sendLloydPhoto(bot.telegram, ctx.chat.id, introCaption);
+      // sendLloydPhoto sends via telegram directly; for the lobby we need
+      // to add the Join button — resend as ctx.replyWithPhoto if no msg returned
+      if (!introMsg) throw new Error("no photo msg");
+      // We can't attach buttons via sendLloydPhoto; edit to add keyboard
+      // Instead, send a separate keyboard message pinned below
+    } catch (_) {}
 
+    // Always send (or re-send) the message with the Join button attached
+    // We use ctx for the initial send so it appears in the right chat
     try {
       const lloydImage = getRandomLloydImage();
       if (lloydImage) {
-        const cachedFileId = getCachedFileId(lloydImage);
-        if (cachedFileId) {
-          introMsg = await ctx.replyWithPhoto(cachedFileId, {
+        const cachedId = getCachedFileId(lloydImage);
+        if (cachedId) {
+          introMsg = await ctx.replyWithPhoto(cachedId, {
             caption: introCaption,
             parse_mode: "HTML",
-            ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
+            ...Markup.inlineKeyboard([Markup.button.callback("👷 Join the Tender", `bonus:join:${id}`)])
           });
         } else {
           introMsg = await ctx.replyWithPhoto({ source: lloydImage }, {
             caption: introCaption,
             parse_mode: "HTML",
-            ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
+            ...Markup.inlineKeyboard([Markup.button.callback("👷 Join the Tender", `bonus:join:${id}`)])
           });
-          if (introMsg.photo?.length > 0) {
-            setCachedFileId(lloydImage, introMsg.photo[introMsg.photo.length - 1].file_id);
-          }
+          const fileId = introMsg?.photo?.at(-1)?.file_id;
+          if (fileId) setCachedFileId(lloydImage, fileId);
         }
-        session.lobbyMessageId = introMsg.message_id;
       } else {
         introMsg = await ctx.reply(introCaption, {
           parse_mode: "HTML",
-          ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
+          ...Markup.inlineKeyboard([Markup.button.callback("👷 Join the Tender", `bonus:join:${id}`)])
         });
-        session.lobbyMessageId = introMsg.message_id;
       }
     } catch (err) {
-      console.error("❌ Error sending bonus intro:", err.message);
+      console.error("Bonus intro send error:", err.message);
       introMsg = await ctx.reply(introCaption, {
         parse_mode: "HTML",
-        ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
-      });
-      session.lobbyMessageId = introMsg.message_id;
+        ...Markup.inlineKeyboard([Markup.button.callback("👷 Join the Tender", `bonus:join:${id}`)])
+      }).catch(() => null);
     }
 
-    // Countdown edits
-    const countdownTimes = [60, 45, 30, 15, 10, 5, 4, 3, 2, 1];
-    let currentCountdownIndex = 0;
+    if (introMsg) session.lobbyMessageId = introMsg.message_id;
 
-    session.timer = setInterval(() => {
-      const timeLeft = countdownTimes[currentCountdownIndex];
-      if (timeLeft === undefined) {
+    // ── Lobby countdown ────────────────────────────────────────────────────
+    // Use a single setInterval that ticks every second and edits at checkpoints
+    let lobbySecondsLeft = 30;
+    const checkpoints = new Set(LOBBY_COUNTDOWN_CHECKPOINTS);
+
+    session.timer = setInterval(async () => {
+      lobbySecondsLeft -= 1;
+
+      // Auto-start if lobby is full
+      if (session.players.length >= 8) {
         clearInterval(session.timer);
-        if (session.players.length >= 3) runBonusRound(bot, session);
-        else {
-          bonusSessions.delete(id);
-          try {
-            bot.telegram.sendMessage(session.chatId, "🚫 <b>Lobby Closed</b>\n\nLloyd refuses to run a psychological finance disaster for fewer than 3 players.", { parse_mode: "HTML" });
-          } catch (err) {
-            console.error("Error sending lobby close message:", err.message);
-          }
-        }
-        return;
+        session.timer = null;
+        await bot.telegram.sendMessage(
+          session.chatId,
+          "👷 <b>8 workers on site — lobby full! Starting immediately.</b>",
+          { parse_mode: "HTML" }
+        ).catch(() => {});
+        return runBonusRound(bot, session);
       }
 
-      // Auto-start if 8 players
-      if (session.players.length === 8) {
-        clearInterval(session.timer);
+      // Edit message at countdown checkpoints
+      if (checkpoints.has(lobbySecondsLeft) && session.lobbyMessageId) {
+        const updatedCaption = buildIntroCaption(lobbySecondsLeft, session.players.length, session.prizePot, session.players);
         try {
-          bot.telegram.editMessageCaption(session.chatId, session.lobbyMessageId, undefined, buildLobbyCaption(session, timeLeft), {
-            parse_mode: "HTML",
-            ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
-          });
-        } catch (err) {
-          // Silently fail on edit errors
+          await bot.telegram.editMessageCaption(
+            session.chatId,
+            session.lobbyMessageId,
+            undefined,
+            updatedCaption,
+            {
+              parse_mode: "HTML",
+              ...Markup.inlineKeyboard([Markup.button.callback("👷 Join the Tender", `bonus:join:${id}`)])
+            }
+          );
+        } catch (_) {} // identical text or old message — silently ignore
+      }
+
+      // Lobby closed
+      if (lobbySecondsLeft <= 0) {
+        clearInterval(session.timer);
+        session.timer = null;
+
+        if (session.players.length >= 3) {
+          await bot.telegram.sendMessage(
+            session.chatId,
+            `🏗️ <b>Lobby closed! ${session.players.length} workers on site.</b>\nPhase 1 starting now...`,
+            { parse_mode: "HTML" }
+          ).catch(() => {});
+          return runBonusRound(bot, session);
+        } else {
+          bonusSessions.delete(id);
+          session.finished = true;
+          await bot.telegram.sendMessage(
+            session.chatId,
+            `🚫 <b>Lobby Closed</b>\n\nLloyd refuses to run a psychological finance disaster for fewer than 3 players.\n<i>"This is embarrassing for everyone."</i>`,
+            { parse_mode: "HTML" }
+          ).catch(() => {});
         }
-        runBonusRound(bot, session);
-        return;
       }
-
-      // Update lobby message
-      try {
-        bot.telegram.editMessageCaption(session.chatId, session.lobbyMessageId, undefined, buildLobbyCaption(session, timeLeft), {
-          parse_mode: "HTML",
-          ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${id}`)])
-        });
-      } catch (err) {
-        // Silently fail on edit errors (identical text, old messages, etc)
-      }
-
-      currentCountdownIndex++;
     }, 1000);
   });
 
+  // ── /fstart ────────────────────────────────────────────────────────────────
   bot.command("fstart", async (ctx) => {
-    const session = [...bonusSessions.values()].find((item) => item.chatId === ctx.chat.id && !item.finished);
+    const session = [...bonusSessions.values()].find((s) => s.chatId === ctx.chat.id && !s.finished);
     if (!session) return ctx.reply("No active Frontera Bonus lobby.", { reply_to_message_id: ctx.message?.message_id });
     if (session.players.length < 3) return ctx.reply("Need at least 3 players.", { reply_to_message_id: ctx.message?.message_id });
     clearInterval(session.timer);
+    session.timer = null;
+    await bot.telegram.sendMessage(
+      session.chatId,
+      `⚡ <b>${ctx.from.first_name} force-started the tender!</b>`,
+      { parse_mode: "HTML" }
+    ).catch(() => {});
     return runBonusRound(bot, session);
   });
 
@@ -1779,6 +1825,7 @@ export function estateCommand(bot) {
     return ctx.reply("Lobby timer controls are acknowledged. Use /fstart when 3+ players are ready.", { reply_to_message_id: ctx.message?.message_id });
   });
 
+  // ── Inline worker query ────────────────────────────────────────────────────
   bot.on("inline_query", async (ctx) => {
     const query = (ctx.inlineQuery?.query || "").trim();
     if (!/^workers\b/i.test(query)) return;
@@ -1786,17 +1833,13 @@ export function estateCommand(bot) {
     const requestedUserId = Number(query.split(/\s+/)[1] || ctx.from.id);
     if (requestedUserId !== ctx.from.id) {
       return ctx.answerInlineQuery(
-        [
-          {
-            type: "article",
-            id: "private-workers",
-            title: "This labour archive is private",
-            description: "Use /workers from your own account to inspect your estate.",
-            input_message_content: {
-              message_text: "Lloyd refuses to leak another baron's labour contracts. Use /workers yourself."
-            }
-          }
-        ],
+        [{
+          type: "article",
+          id: "private-workers",
+          title: "This labour archive is private",
+          description: "Use /workers from your own account to inspect your estate.",
+          input_message_content: { message_text: "Lloyd refuses to leak another baron's labour contracts. Use /workers yourself." }
+        }],
         { cache_time: 1, is_personal: true }
       );
     }
@@ -1808,35 +1851,28 @@ export function estateCommand(bot) {
     const results = inlineWorkerResults(user, workers);
     if (!results.length) {
       return ctx.answerInlineQuery(
-        [
-          {
-            type: "article",
-            id: "no-worker-images",
-            title: "No public worker portraits ready",
-            description: "Summon a new /worker or set PUBLIC_URL/RENDER_EXTERNAL_URL for inline portraits.",
-            input_message_content: {
-              message_text:
-                "No inline portraits are ready yet. Summon a new /worker so Telegram can cache the portrait, or set PUBLIC_URL/RENDER_EXTERNAL_URL for public asset links."
-            }
-          }
-        ],
+        [{
+          type: "article",
+          id: "no-worker-images",
+          title: "No public worker portraits ready",
+          description: "Summon a new /worker or set PUBLIC_URL/RENDER_EXTERNAL_URL for inline portraits.",
+          input_message_content: { message_text: "No inline portraits are ready yet. Summon a new /worker so Telegram can cache the portrait, or set PUBLIC_URL/RENDER_EXTERNAL_URL for public asset links." }
+        }],
         { cache_time: 1, is_personal: true }
       );
     }
 
-    return ctx.answerInlineQuery(results, {
-      cache_time: 5,
-      is_personal: true
-    });
+    return ctx.answerInlineQuery(results, { cache_time: 5, is_personal: true });
   });
 
+  // ── Shop action ────────────────────────────────────────────────────────────
   bot.action(/^shop:(.+)$/, async (ctx) => {
     const key = ctx.match[1];
     const items = {
       safety_helmet: ["Safety Helmet", 500],
-      morale_boost: ["Morale Boost", 200],
-      scam_permit: ["Scam Permit", 300],
-      javier_pass: ["Javier Pass", 1000]
+      morale_boost:  ["Morale Boost",  200],
+      scam_permit:   ["Scam Permit",   300],
+      javier_pass:   ["Javier Pass",  1000]
     };
     const [name, cost] = items[key] || [];
     const user = await ensureEstateUser(ctx.from);
@@ -1851,6 +1887,7 @@ export function estateCommand(bot) {
     return ctx.reply(`Smart investment. Lloyd would be proud.\n\nPurchased: ${name}`);
   });
 
+  // ── Worker gallery actions ─────────────────────────────────────────────────
   bot.action(/^workers:explore:(.+)$/, async (ctx) => {
     const id = ctx.match[1];
     const session = gallerySessions.get(id);
@@ -1888,36 +1925,23 @@ export function estateCommand(bot) {
       Markup.button.callback("Close", `workers:close:${id}`)
     ]);
     const imagePath = resolveWorkerImage(worker);
-    const caption = workerContractCaption(worker, user);
+    const caption   = workerContractCaption(worker, user);
 
     if (!imagePath) {
       return ctx.reply(`${caption}\n\n<i>Image unavailable; contract details recovered from the ledger.</i>`, {
-        parse_mode: "HTML",
-        ...keyboard
+        parse_mode: "HTML", ...keyboard
       });
     }
 
     worker.imagePath = imagePath;
     try {
       return await ctx.editMessageMedia(
-        {
-          type: "photo",
-          media: { source: imagePath },
-          caption,
-          parse_mode: "HTML"
-        },
+        { type: "photo", media: { source: imagePath }, caption, parse_mode: "HTML" },
         keyboard
       );
     } catch (err) {
       console.error("Worker view edit error:", err);
-      return ctx.replyWithPhoto(
-        { source: imagePath },
-        {
-          caption,
-          parse_mode: "HTML",
-          ...keyboard
-        }
-      );
+      return ctx.replyWithPhoto({ source: imagePath }, { caption, parse_mode: "HTML", ...keyboard });
     }
   });
 
@@ -1927,9 +1951,11 @@ export function estateCommand(bot) {
     if (!session || session.userId !== ctx.from.id) return ctx.answerCbQuery("This gallery expired.");
     gallerySessions.delete(id);
     await ctx.answerCbQuery("Closed.");
-    return ctx.editMessageCaption("Labour archive closed. Lloyd has returned the portraits to the vault.").catch(() => ctx.deleteMessage().catch(() => {}));
+    return ctx.editMessageCaption("Labour archive closed. Lloyd has returned the portraits to the vault.")
+      .catch(() => ctx.deleteMessage().catch(() => {}));
   });
 
+  // ── Scam actions ───────────────────────────────────────────────────────────
   bot.action(/^scam:aw:([^:]+):(\d+)$/, async (ctx) => {
     const session = scamSessions.get(ctx.match[1]);
     if (!session || session.attackerId !== ctx.from.id) return ctx.answerCbQuery("This scam is not yours.");
@@ -1947,12 +1973,12 @@ export function estateCommand(bot) {
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          Markup.button.callback("Give Up", `scam:surrender:${session.id}`),
+          Markup.button.callback("Give Up",       `scam:surrender:${session.id}`),
           Markup.button.callback("Deploy Worker", `scam:def:${session.id}`)
         ])
       }
     );
-    setTimeout(() => resolveScam(ctx, session, "\nDefender did not respond. Auto surrender."), 30 * 1000);
+    setTimeout(() => resolveScam(ctx, session, "\nDefender did not respond. Auto surrender."), 30_000);
   });
 
   bot.action(/^scam:surrender:(.+)$/, async (ctx) => {
@@ -1966,12 +1992,14 @@ export function estateCommand(bot) {
     const session = scamSessions.get(ctx.match[1]);
     if (!session || session.defenderId !== ctx.from.id) return ctx.answerCbQuery("Only the defender can deploy.");
     const defender = await ensureEstateUser(ctx.from);
-    const options = topWorkers(defender);
+    const options  = topWorkers(defender);
     if (!options.length) return ctx.answerCbQuery("You have no workers.", { show_alert: true });
     await ctx.answerCbQuery("Choose a defender.");
     return ctx.reply(
       "Choose your defender.",
-      Markup.inlineKeyboard(options.map(({ worker, index }) => [Markup.button.callback(`${worker.name} (${worker.level})`, `scam:dw:${session.id}:${index}`)]))
+      Markup.inlineKeyboard(options.map(({ worker, index }) => [
+        Markup.button.callback(`${worker.name} (${worker.level})`, `scam:dw:${session.id}:${index}`)
+      ]))
     );
   });
 
@@ -1982,12 +2010,12 @@ export function estateCommand(bot) {
     await ctx.answerCbQuery("Defender deployed.");
     const buttons = [
       Markup.button.callback("Aggressive", `scam:t:${session.id}:aggressive`),
-      Markup.button.callback("Defensive", `scam:t:${session.id}:defensive`),
-      Markup.button.callback("Deceptive", `scam:t:${session.id}:deceptive`)
+      Markup.button.callback("Defensive",  `scam:t:${session.id}:defensive`),
+      Markup.button.callback("Deceptive",  `scam:t:${session.id}:deceptive`)
     ];
     await ctx.telegram.sendMessage(session.attackerId, "Choose your secret tactic.", Markup.inlineKeyboard(buttons, { columns: 1 }));
     await ctx.telegram.sendMessage(session.defenderId, "Choose your secret tactic.", Markup.inlineKeyboard(buttons, { columns: 1 }));
-    setTimeout(() => resolveScam(ctx, session, "\nTactic timer expired."), 15 * 1000);
+    setTimeout(() => resolveScam(ctx, session, "\nTactic timer expired."), 15_000);
   });
 
   bot.action(/^scam:t:([^:]+):(aggressive|defensive|deceptive)$/, async (ctx) => {
@@ -2005,76 +2033,96 @@ export function estateCommand(bot) {
     if (session.attackerTactic && session.defenderTactic) return resolveScam(ctx, session);
   });
 
+  // ── Bonus: join ────────────────────────────────────────────────────────────
   bot.action(/^bonus:join:(.+)$/, async (ctx) => {
     const session = bonusSessions.get(ctx.match[1]);
     if (!session || session.finished) return ctx.answerCbQuery("Lobby closed.");
-    if (session.players.some((player) => player.id === ctx.from.id)) return ctx.answerCbQuery("Already joined.");
+    if (session.players.some((p) => p.id === ctx.from.id)) {
+      return ctx.answerCbQuery("You're already on site.", { show_alert: false });
+    }
     if (session.players.length >= 8) return ctx.answerCbQuery("Lobby full.", { show_alert: true });
-    
+
     const user = await ensureEstateUser(ctx.from);
-    if (getRp(user) < BONUS_ENTRY_FEE) return ctx.answerCbQuery("Need 100 RP.", { show_alert: true });
-    
+    if (getRp(user) < BONUS_ENTRY_FEE) {
+      return ctx.answerCbQuery(`Need ${BONUS_ENTRY_FEE} RP to join.`, { show_alert: true });
+    }
+
     setRp(user, getRp(user) - BONUS_ENTRY_FEE);
     await user.save();
     session.prizePot += BONUS_ENTRY_FEE;
-    session.players.push({ id: ctx.from.id, name: ctx.from.first_name || "Worker", hp: 100, stash: 0, alive: true });
-    
+    session.players.push({
+      id: ctx.from.id,
+      name: ctx.from.first_name || "Worker",
+      hp: 100,
+      stash: 0,
+      alive: true
+    });
+
     await ctx.answerCbQuery("✅ Joined the tender!");
-    
-    // Update lobby message with new player count
-    try {
-      await ctx.editMessageCaption(buildLobbyCaption(session, 60), {
-        parse_mode: "HTML",
-        ...Markup.inlineKeyboard([Markup.button.callback("Join", `bonus:join:${session.id}`)])
-      });
-    } catch (err) {
-      // Silently fail on edit errors
+
+    // Update lobby message
+    if (session.lobbyMessageId) {
+      const updatedCaption = buildIntroCaption(
+        "⏳", // timer is running — don't show exact seconds here
+        session.players.length,
+        session.prizePot,
+        session.players
+      );
+      try {
+        await ctx.editMessageCaption(updatedCaption, {
+          parse_mode: "HTML",
+          ...Markup.inlineKeyboard([Markup.button.callback("👷 Join the Tender", `bonus:join:${session.id}`)])
+        });
+      } catch (_) {}
     }
   });
 
+  // ── Bonus: choice ──────────────────────────────────────────────────────────
   bot.action(/^bonus:choice:([^:]+):(.+)$/, async (ctx) => {
-    const session = bonusSessions.get(ctx.match[1]);
-    if (!session || session.finished) return ctx.answerCbQuery("Game closed.");
-    const player = session.players.find((item) => item.id === ctx.from.id && item.alive);
-    if (!player) return ctx.answerCbQuery("You are not alive in this game.");
-    
-    // Lock choice (prevent re-submission)
-    if (session.choices.has(ctx.from.id)) return ctx.answerCbQuery("Choice already locked.", { show_alert: false });
-    
-    const choice = ctx.match[2];
+    const sessionId = ctx.match[1];
+    const choice    = ctx.match[2];
+    const session   = bonusSessions.get(sessionId);
+
+    if (!session || session.finished) return ctx.answerCbQuery("This game has ended.");
+
+    const player = session.players.find((p) => p.id === ctx.from.id && p.alive);
+    if (!player) return ctx.answerCbQuery("You're not alive in this game.");
+
+    // Prevent re-submission
+    if (session.choices.has(ctx.from.id)) {
+      return ctx.answerCbQuery("Your work order is already filed.", { show_alert: false });
+    }
+
     session.choices.set(ctx.from.id, choice);
-    
-    await ctx.answerCbQuery("✅ Choice locked.");
-    
-    // Edit DM to show confirmation
-    const choiceLabel = getChoiceLabel(choice);
-    const aliveCount = session.players.filter(p => p.alive).length;
+    await ctx.answerCbQuery("✅ Work order filed!");
+
+    const aliveCount    = session.players.filter((p) => p.alive).length;
     const receivedCount = session.choices.size;
-    
+    const choiceLabel   = getChoiceLabel(choice);
+
+    // Edit DM to show locked-in confirmation
     try {
-      await ctx.editMessageCaption(buildChoiceConfirmation(player.name, choiceLabel, receivedCount, aliveCount), {
-        parse_mode: "HTML"
-      });
-    } catch (err) {
-      // Silently fail
-    }
-    
-    // Send group update
-    try {
-      await bot.telegram.sendMessage(session.chatId, `📬 <b>${escapeHtml(player.name)}</b> submitted their work order. (${receivedCount}/${aliveCount} received)`, { parse_mode: "HTML" });
-    } catch (err) {
-      // Silently fail
-    }
-    
-    // Check if all players submitted
-    if (receivedCount === aliveCount) {
-      try {
-        await bot.telegram.sendMessage(session.chatId, "⚡ <b>All work orders received!</b> Lloyd is tallying results...", { parse_mode: "HTML" });
-      } catch (err) {
-        // Silently fail
-      }
-      // Immediately settle this round (skip remaining timer)
-      await settleBonusRound(bot, ctx.telegram, session.id);
+      await ctx.editMessageCaption(
+        buildChoiceConfirmation(player.name, choiceLabel, receivedCount, aliveCount),
+        { parse_mode: "HTML" }
+      );
+    } catch (_) {}
+
+    // Mystery update in group (no spoilers)
+    await bot.telegram.sendMessage(
+      session.chatId,
+      `📬 <b>${escapeHtml(player.name)}</b> submitted their work order. (${receivedCount}/${aliveCount} received)`,
+      { parse_mode: "HTML" }
+    ).catch(() => {});
+
+    // If all alive players have submitted, settle immediately
+    if (receivedCount >= aliveCount) {
+      await bot.telegram.sendMessage(
+        session.chatId,
+        "⚡ <b>All work orders received!</b> Lloyd is tallying results...",
+        { parse_mode: "HTML" }
+      ).catch(() => {});
+      triggerSettle(bot, session);
     }
   });
 }
