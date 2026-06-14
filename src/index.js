@@ -52,7 +52,8 @@ async function launchBotWithRetry() {
   while (true) {
     try {
       await bot.launch({
-        dropPendingUpdates: true
+        dropPendingUpdates: true,
+        allowedUpdates: ["message", "callback_query", "chat_member", "my_chat_member"]
       });
       console.log("🤖 Monster Bot is running");
       return;
@@ -238,10 +239,19 @@ async function start() {
   await launchBotWithRetry();
 }
 
-start();
+start().catch((err) => {
+  console.error("FATAL: start() failed:", err?.message || err);
+  process.exit(1);
+});
 
 // ─── GRACEFUL SHUTDOWN (RAILWAY SAFE) ──────
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
-process.on("unhandledRejection", (err) => recordError("unhandledRejection", err));
-process.on("uncaughtException", (err) => recordError("uncaughtException", err));
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err?.message || err);
+  recordError("unhandledRejection", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err?.message || err);
+  recordError("uncaughtException", err);
+});
