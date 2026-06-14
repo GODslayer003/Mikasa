@@ -27,7 +27,8 @@ export async function migrateLegacyCurrency() {
           }
         }
       }
-    ]
+    ],
+    { updatePipeline: true }
   );
 
   const zeroed = await User.updateMany(
