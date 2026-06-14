@@ -120,7 +120,7 @@ export function registerAfk(bot) {
   });
 
   // ─── brb <reason> (text trigger) ──────────────────
-  bot.hears(/^(?i)brb\b/, async (ctx) => {
+  bot.hears(/^brb\b/i, async (ctx) => {
     try {
       if (!ctx.from || !ctx.message) return;
       if (ctx.from.is_bot) return;
