@@ -52,8 +52,7 @@ async function launchBotWithRetry() {
   while (true) {
     try {
       await bot.launch({
-        dropPendingUpdates: true,
-        allowedUpdates: []
+        dropPendingUpdates: true
       });
       console.log("🤖 Monster Bot is running");
       return;
