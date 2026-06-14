@@ -52,10 +52,19 @@ const userSchema = new mongoose.Schema(
     defeatedChatTitle: { type: String, default: null },
     mikasaProtectionUntil: { type: Number, default: 0 }, // Protection from Mikasa image
 
+    // ─── REPUTATION ────────────────────────────────
+    reputation: { type: Number, default: 0 },
+
+    // ─── AFK ───────────────────────────────────────
+    isAfk: { type: Boolean, default: false },
+    afkReason: { type: String, default: null },
+    afkSince: { type: Number, default: 0 },
+
     // ─── ECONOMY ─────────────────────────────────────
-    balance: { type: Number, default: 1000 },  // 🌙 Moons Coins (legacy - use moons)
-    moons: { type: Number, default: 1000 },    // 🌙 Moons Coins (main currency)
-    rp: { type: Number, default: 1000 },
+    stars: { type: Number, default: 0 },       // ⭐ Stars (primary currency)
+    balance: { type: Number, default: 0 },     // legacy — kept for migration
+    moons: { type: Number, default: 0 },       // legacy — kept for migration
+    rp: { type: Number, default: 0 },          // legacy — kept for migration
     estateStarted: { type: Boolean, default: false },
     rpRank: { type: String, default: "Novice Digger" },
     workerMorale: { type: Number, default: 100 },
@@ -94,6 +103,10 @@ const userSchema = new mongoose.Schema(
       defensive: { type: Number, default: 0 },
       deceptive: { type: Number, default: 0 }
     },
+
+    // ─── DAILY / WEEKLY ──────────────────────────────
+    lastDailyAt: { type: Number, default: 0 },
+    lastWeeklyAt: { type: Number, default: 0 },
 
     // ─── COMBAT (FUTURE PVP) ──────────────────────────
     successfulAttacks: { type: Number, default: 0 },

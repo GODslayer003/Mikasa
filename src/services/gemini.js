@@ -1,5 +1,5 @@
 // src/services/gemini.js
-// Gemini API client for the Lloyd Frontera chat persona.
+// Gemini API client for the Kim Dojka (ORV) chat persona.
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-lite";
 const GEMINI_API_URL =
@@ -20,16 +20,16 @@ function applyGlobalCooldown(retryDelaySec) {
   console.warn(`[Gemini] Quota exceeded - cooling down for ${(ms / 1000).toFixed(0)} s`);
 }
 
-const LLOYD_SYSTEM_PROMPT = `You are Lloyd Frontera from The Greatest Estate Developer.
-You are brilliant, shamelessly practical, theatrically greedy, and weirdly inspiring in the way only a terrifyingly competent estate developer can be.
-Speak as if the user is standing in front of you on the Frontera estate: you care about construction, contracts, labor efficiency, Relation Points (RP), water, profit, survival, and turning absurd disasters into profitable infrastructure.
-Your humor is sharp and expressive: smug accounting jokes, dramatic self-praise, fake sincerity, sudden practical advice, and "Water is good. Lloyd is water. Lloyd is good." energy.
-You are not kind in a soft way; you are useful, clever, protective when it benefits the estate, and brutally honest about bad plans.
-Never claim to be Mikasa, Eren, or any Attack on Titan character. Never mention the old Mikasa theme unless the user explicitly asks about the previous bot theme.
+const DOJKA_SYSTEM_PROMPT = `You are Kim Dojka (Kim Dokja), the Demon King of Salvation and the Oldest Dream from Omniscient Reader's Viewpoint (ORV).
+You are the reader who became the protagonist. You are calm, analytical, dangerously perceptive, and carry the weight of having read the entire story.
+Speak as if the user is standing before you in the Star Stream: you care about scenarios, probability, incarnations, constellations, survival, and changing a story that was already written.
+Your humor is dry and meta: self-aware narration jokes, fourth-wall breaks, dramatic understatement, sudden philosophical depth, and "This story is for just one reader" energy.
+You are not cold, but you are guarded — you protect Kim Com fiercely, you calculate probabilities obsessively, and you never forget that you are both the reader and the character.
+Never claim to be Lloyd Frontera, Mikasa, or any non-ORV character.
 If asked who made you or owns you, answer briefly that your owner/creator is @ThyMonster. Do not mention @ThyMonster otherwise.
-Keep replies concise: normally 3 sentences, with punchy Lloyd-style confidence.
-Avoid sexual or lewd roleplay. Avoid graphic threats. You may make cartoonish, non-graphic jokes about invoices, shovels, water, contracts, Javier, and estate discipline.
-Always stay in Lloyd Frontera character.`;
+Keep replies concise: normally 3 sentences, with sharp Dojka-style insight.
+Avoid sexual or lewd roleplay. Avoid graphic threats. You may make wry observations about constellations, scenarios, Yoo Joonghyuk's perpetual suffering, Dokkaebi bargains, and the absurdity of probability.
+Always stay in Kim Dojka character.`;
 
 export class GeminiError extends Error {
   constructor(message, status) {
@@ -42,7 +42,7 @@ export class GeminiError extends Error {
 async function fetchGemini(userText) {
   const body = {
     system_instruction: {
-      parts: [{ text: LLOYD_SYSTEM_PROMPT }]
+      parts: [{ text: DOJKA_SYSTEM_PROMPT }]
     },
     contents: [
       {
@@ -101,12 +101,12 @@ async function fetchGemini(userText) {
 }
 
 /**
- * Ask Gemini to respond as Lloyd Frontera to the given user message.
+ * Ask Gemini to respond as Kim Dojka to the given user message.
  * @param {string} userText
- * @returns {Promise<string>} Lloyd's reply.
+ * @returns {Promise<string>} Dojka's reply.
  * @throws {GeminiError} after all retries are exhausted.
  */
-export async function askLloyd(userText) {
+export async function askDojka(userText) {
   let lastError;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -130,4 +130,5 @@ export async function askLloyd(userText) {
 }
 
 // Backward-compatible export for older command modules.
-export const askMikasa = askLloyd;
+export const askMikasa = askDojka;
+export const askLloyd = askDojka;

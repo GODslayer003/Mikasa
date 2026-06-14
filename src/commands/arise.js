@@ -1,17 +1,15 @@
-// src/commands/arise.js
 import { User } from "../models/User.js";
 import { LEVELS } from "../game/levels.js";
+import { getDojkaQuote } from "../services/dojkaAssets.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-// ─── PATH SETUP ─────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ─── CONFIG ─────────────────────────────────
-const COOLDOWN = 60 * 30; // 30 minutes
-const FAIL_CHANCE = 25;   // 15% chance to find nothing
+const COOLDOWN = 60 * 30;
+const FAIL_CHANCE = 25;
 
 function rollLevel() {
   const roll = Math.random() * 100;
@@ -30,10 +28,9 @@ export function ariseCommand(bot) {
 
       const now = Math.floor(Date.now() / 1000);
       const userId = ctx.from.id;
-      const firstName = ctx.from.first_name || "Scout";
+      const firstName = ctx.from.first_name || "Incarnation";
       const mention = `<a href="tg://user?id=${userId}">${firstName}</a>`;
 
-      // ─── FIND / CREATE USER ─────────────────
       let user = await User.findOne({ telegramId: userId });
 
       if (!user) {
@@ -49,22 +46,20 @@ export function ariseCommand(bot) {
         });
       }
 
-      // ─── SAFETY (LEGACY USERS) ─────────────
       if (!Array.isArray(user.shadows)) user.shadows = [];
       if (!user.totalStars) user.totalStars = 0;
       if (!user.totalPower) user.totalPower = 0;
       if (!user.lastAriseAt) user.lastAriseAt = 0;
 
-      // ─── COOLDOWN ──────────────────────────
       if (now - user.lastAriseAt < COOLDOWN) {
         const left = COOLDOWN - (now - user.lastAriseAt);
         const minutes = Math.ceil(left / 60);
 
         return ctx.reply(
-          `🧣 <b>Arise Cooldown</b>\n\n` +
+          `🌌 <b>Star Stream — Cooldown</b>\n\n` +
           `⏰ <b>${minutes} minute${minutes !== 1 ? 's' : ''}</b> remaining\n\n` +
-          `«You are overextending. Rest. Your life depends on it.»\n` +
-          `— Mikasa`,
+          `«The Star Stream flows at its own pace. You cannot force a scenario.»\n` +
+          `— Kim Dojka`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
@@ -72,16 +67,14 @@ export function ariseCommand(bot) {
         );
       }
 
-      // ─── FAILURE CHANCE ────────────────────
       if (Math.random() * 100 < FAIL_CHANCE) {
-        user.lastAriseAt = now; // Still trigger cooldown
+        user.lastAriseAt = now;
         await user.save();
 
         return ctx.reply(
-          `🧣 <b>SCAPE REPORT: EMPTY</b>\n\n` +
-          `The area is deserted. There are no allies here to recruit.\n\n` +
-          `«The world is cruel. Sometimes, you find nothing but dust. Do not lose your resolve.»\n` +
-          `— Mikasa`,
+          `🌌 <b>Star Stream Revelation: Empty</b>\n\n` +
+          `No incarnations answered your call. The probability of this scenario was against you.\n\n` +
+          `«${getDojkaQuote()}»`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
@@ -89,7 +82,6 @@ export function ariseCommand(bot) {
         );
       }
 
-      // ─── ROLL CHARACTER ────────────────────
       const levelKey = rollLevel();
       const levelData = LEVELS[levelKey];
 
@@ -105,7 +97,7 @@ export function ariseCommand(bot) {
         return ctx.reply(
           `⚠️ <b>No Assets Found</b>\n\n` +
           `Failed to access: <code>${levelData.folder}</code>\n\n` +
-          `«Scouting report incomplete.»`,
+          `«The Star Stream has not prepared this scenario yet.»`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
@@ -119,9 +111,9 @@ export function ariseCommand(bot) {
 
       if (!files.length) {
         return ctx.reply(
-          `🛡️ <b>No Recruits Available</b>\n\n` +
-          `${levelData.emoji} <b>${levelData.label}</b> barracks are empty.\n\n` +
-          `«No soldiers in this division.»`,
+          `🌟 <b>No Incarnations Available</b>\n\n` +
+          `${levelData.emoji} <b>${levelData.label}</b> constellations have no followers to spare.\n\n` +
+          `«The probability is 0.001%.»`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
@@ -139,7 +131,6 @@ export function ariseCommand(bot) {
         imagePath: path.join(folder, file)
       };
 
-      // ─── SAVE ──────────────────────────────
       user.shadows.push(shadow);
       user.totalStars += levelData.stars;
       user.totalPower += levelData.power;
@@ -147,38 +138,34 @@ export function ariseCommand(bot) {
       user.lastSeenAt = now;
       await user.save();
 
-      // ─── FORMAT STARS ──────────────────────
       const stars = "★".repeat(levelData.stars) + "☆".repeat(5 - levelData.stars);
 
-      // ─── FINAL RESPONSE ────────────────────
       await ctx.replyWithPhoto(
         { source: shadow.imagePath },
         {
           caption:
-            `🛡️ <b>RECRUIT REPORT</b>\n` +
+            `🌌 <b>STAR STREAM — SPONSORSHIP</b>\n` +
             `━━━━━━━━━━━━━━\n\n` +
             `${levelData.emoji} <b>${shadow.name}</b>\n` +
-            `└─ <i>${levelData.label}</i>\n\n` +
+            `└─ <i>${levelData.label} Incarnation</i>\n\n` +
             `⭐ <b>${stars}</b>\n` +
-            `⚡ <b>${levelData.power}</b> Combat Power\n\n` +
+            `⚡ <b>${levelData.power}</b> Probability\n\n` +
             `━━━━━━━━━━━━━━\n` +
-            `🧣 <b>${firstName}'s Regiment</b>\n` +
-            `┌─ Soldiers: <b>${user.shadows.length}</b>\n` +
-            `├─ Total Power: <b>${user.totalPower}</b>\n` +
+            `🌟 <b>${firstName}'s Kim Com</b>\n` +
+            `┌─ Incarnations: <b>${user.shadows.length}</b>\n` +
+            `├─ Total Probability: <b>${user.totalPower}</b>\n` +
             `└─ Total Stars: <b>${user.totalStars}</b>\n\n` +
-            `«I will protect you. No matter what.»\n` +
-            `— Mikasa`,
+            `«${getDojkaQuote()}»`,
           parse_mode: "HTML",
           reply_to_message_id: ctx.message.message_id
         }
       );
 
     } catch (err) {
-      console.error("MIKA ARISE ERROR:", err);
+      console.error("ARISE ERROR:", err);
       await ctx.reply(
-        `⚠️ <b>System Error</b>\n\n` +
-        `«Fall back and regroup. Try again.»\n` +
-        `— Mikasa`,
+        `⚠️ <b>Scenario Error</b>\n\n` +
+        `«${getDojkaQuote()}»`,
         {
           parse_mode: "HTML",
           reply_to_message_id: ctx.message.message_id

@@ -36,7 +36,7 @@ function format(value) {
 }
 
 function getToken() {
-  return localStorage.getItem("frontera_admin_token") || tokenFromQuery;
+  return localStorage.getItem("dojka_admin_token") || tokenFromQuery;
 }
 
 function getRoute() {
@@ -75,8 +75,8 @@ function workerScore(workers = []) {
 }
 
 function workerOutput(workers = []) {
-  const rp = { LOW: 2, MID: 5, TOP: 12, LEGEND: 25, ULTRA: 50 };
-  return workers.reduce((sum, worker) => sum + (rp[worker.level] || 0), 0);
+  const tierStars = { LOW: 2, MID: 5, TOP: 12, LEGEND: 25, ULTRA: 50 };
+  return workers.reduce((sum, worker) => sum + (tierStars[worker.level] || 0), 0);
 }
 
 function App() {
@@ -88,7 +88,7 @@ function App() {
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [route, setRoute] = useState(getRoute());
-  const [form, setForm] = useState({ rp: 0, hp: 100, workerMorale: 100, isBanned: false, shadows: "[]" });
+  const [form, setForm] = useState({ stars: 0, hp: 100, isBanned: false, shadows: "[]" });
 
   const selectedStats = useMemo(() => {
     const workers = selected?.shadows || [];
@@ -125,9 +125,8 @@ function App() {
       const user = await api(`/api/admin/users/${id}`);
       setSelected(user);
       setForm({
-        rp: user.rp ?? user.balance ?? 0,
+        stars: user.stars ?? 0,
         hp: user.hp ?? 100,
-        workerMorale: user.workerMorale ?? 100,
         isBanned: Boolean(user.isBanned),
         shadows: JSON.stringify(user.shadows || [], null, 2)
       });
@@ -146,9 +145,8 @@ function App() {
       await api(`/api/admin/users/${selected.telegramId}`, {
         method: "PATCH",
         body: JSON.stringify({
-          rp: Number(form.rp),
+          stars: Number(form.stars),
           hp: Number(form.hp),
-          workerMorale: Number(form.workerMorale),
           isBanned: form.isBanned,
           shadows: JSON.parse(form.shadows || "[]")
         })
@@ -172,7 +170,7 @@ function App() {
 
   useEffect(() => {
     if (token) {
-      localStorage.setItem("frontera_admin_token", token);
+      localStorage.setItem("dojka_admin_token", token);
     }
     refresh();
   }, [token]);
@@ -194,8 +192,8 @@ function App() {
 
   const metrics = [
     { label: "Users", value: summary?.users, icon: Users, tone: "green" },
-    { label: "Total RP", value: format(summary?.totalRp), icon: Coins, tone: "gold" },
-    { label: "Workers", value: summary?.totalWorkers, icon: Wand2, tone: "blue" },
+    { label: "Total Stars", value: format(summary?.totalStars), icon: Coins, tone: "gold" },
+    { label: "Incarnations", value: summary?.totalIncarnations, icon: Wand2, tone: "blue" },
     { label: "Banned", value: summary?.bannedUsers, icon: Ban, tone: "red" }
   ];
 
@@ -205,10 +203,10 @@ function App() {
     <div className="app">
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="brand">
-          <div className="brandMark">LF</div>
+          <div className="brandMark">KD</div>
           <div>
-            <strong>Frontera</strong>
-            <span>Estate Control</span>
+            <strong>Kim Com</strong>
+            <span>Star Stream Control</span>
           </div>
         </div>
 
@@ -226,8 +224,8 @@ function App() {
         </nav>
 
         <div className="ownerCard">
-          <span>Lloyd says</span>
-          <b>Water is good. Audits are better.</b>
+          <span>Kim Dojka says</span>
+          <b>This story is for just one reader.</b>
         </div>
       </aside>
 
@@ -240,7 +238,7 @@ function App() {
           </div>
           <div className="tokenBox">
             {!token ? (
-              <form onSubmit={(e) => { e.preventDefault(); const email = e.target.email?.value?.trim(); const pass = e.target.password?.value || ""; if (email === ADMIN_LOGIN.email && pass === ADMIN_LOGIN.pass) { setToken(pass); localStorage.setItem("frontera_admin_token", pass); setError(""); refresh(); } else { setError("Invalid login credentials."); } }}>
+              <form onSubmit={(e) => { e.preventDefault(); const email = e.target.email?.value?.trim(); const pass = e.target.password?.value || ""; if (email === ADMIN_LOGIN.email && pass === ADMIN_LOGIN.pass) { setToken(pass); localStorage.setItem("dojka_admin_token", pass); setError(""); refresh(); } else { setError("Invalid login credentials."); } }}>
                 <input name="email" defaultValue={ADMIN_LOGIN.email} placeholder="email" />
                 <input name="password" placeholder="password" type="password" />
                 <button type="submit"><Save size={16} /> Login</button>
@@ -248,7 +246,7 @@ function App() {
             ) : (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span style={{ color: '#9eafca' }}>Signed in</span>
-                <button type="button" onClick={() => { setToken(""); localStorage.removeItem("frontera_admin_token"); setSelected(null); setError(""); }}><RefreshCw size={16} /> Logout</button>
+                <button type="button" onClick={() => { setToken(""); localStorage.removeItem("dojka_admin_token"); setSelected(null); setError(""); }}><RefreshCw size={16} /> Logout</button>
                 <button type="button" onClick={refresh}><RefreshCw size={16} /> Sync</button>
               </div>
             )}
@@ -315,8 +313,8 @@ function App() {
                       <b>{user.firstName || "Unnamed Worker"}</b>
                       <small>@{user.username || "none"} · {user.telegramId}</small>
                     </span>
-                    <em>{format(user.rp)} RP</em>
-                    <small>{user.workers} workers · {user.hp}/100 HP</small>
+                    <em>{format(user.stars)} ⭐ Stars</em>
+                    <small>{user.incarnations} incarnations · {user.hp}/100 HP</small>
                   </button>
                 )) : <div className="empty">No users available.</div>}
               </div>
@@ -339,9 +337,8 @@ function App() {
                     <div><span>Power</span><b>{selectedStats.power}</b></div>
                   </div>
                   <form className="editor" onSubmit={saveUser}>
-                    <label>RP<input type="number" value={form.rp} onChange={(event) => setForm({ ...form, rp: event.target.value })} /></label>
+                     <label>Stars<input type="number" min="0" value={form.stars} onChange={(event) => setForm({ ...form, stars: event.target.value })} /></label>
                     <label>HP<input type="number" min="0" max="100" value={form.hp} onChange={(event) => setForm({ ...form, hp: event.target.value })} /></label>
-                    <label>Morale<input type="number" min="0" max="100" value={form.workerMorale} onChange={(event) => setForm({ ...form, workerMorale: event.target.value })} /></label>
                     <label className="check"><input type="checkbox" checked={form.isBanned} onChange={(event) => setForm({ ...form, isBanned: event.target.checked })} /> Banned</label>
                     <button><Save size={16} /> Save Ledger</button>
                   </form>
@@ -363,7 +360,7 @@ function App() {
                   </label>
                 </>
               ) : (
-                <div className="empty">Choose a player from the registry. Lloyd refuses to edit imaginary payroll.</div>
+                <div className="empty">Choose a player from the registry. Kim Dojka refuses to edit imaginary records.</div>
               )}
             </article>
           </section>
@@ -388,7 +385,7 @@ function App() {
                 {lowHealthUsers.length ? lowHealthUsers.slice(0, 10).map((user) => (
                   <div className="errorItem" key={user.telegramId}>
                     <b>{user.firstName || user.telegramId}</b>
-                    <span>{user.hp}/100 HP · {format(user.rp)} RP</span>
+                    <span>{user.hp}/100 HP · {format(user.stars)} ⭐ Stars</span>
                     <small>@{user.username || "none"}</small>
                   </div>
                 )) : <p>No low health workers detected.</p>}
@@ -401,7 +398,7 @@ function App() {
               <div className="errorList">
                 <div className="errorItem">
                   <b>Current output estimate</b>
-                  <span>{(Array.isArray(users) ? users.reduce((sum, user) => sum + ((user.workers || 0) * 5), 0) : 0)} RP/hr</span>
+                   <span>{(Array.isArray(users) ? users.reduce((sum, user) => sum + ((user.incarnations || 0) * 5), 0) : 0)} Stars/hr</span>
                   <small>Projection based on worker counts and average tier output.</small>
                 </div>
               </div>
@@ -442,7 +439,7 @@ function App() {
                 {bannedUsers.length ? bannedUsers.map((user) => (
                   <div className="errorItem" key={user.telegramId}>
                     <b>{user.firstName || user.telegramId}</b>
-                    <span>{format(user.rp)} RP · {user.workers} workers</span>
+                    <span>{format(user.stars)} ⭐ Stars · {user.incarnations} incarnations</span>
                     <small>@{user.username || "none"}</small>
                   </div>
                 )) : <p>No banned accounts at the moment.</p>}
@@ -459,7 +456,7 @@ function App() {
               </div>
               {selected ? (
                 <form className="editor" onSubmit={saveUser}>
-                  <label>RP<input type="number" value={form.rp} onChange={(event) => setForm({ ...form, rp: event.target.value })} /></label>
+                  <label>Stars<input type="number" min="0" value={form.stars} onChange={(event) => setForm({ ...form, stars: event.target.value })} /></label>
                   <label>HP<input type="number" min="0" max="100" value={form.hp} onChange={(event) => setForm({ ...form, hp: event.target.value })} /></label>
                   <label className="check"><input type="checkbox" checked={form.isBanned} onChange={(event) => setForm({ ...form, isBanned: event.target.checked })} /> Banned</label>
                   <button><Save size={16} /> Save Ban Status</button>

@@ -1,200 +1,265 @@
-// src/commands/mute.js
-import { Markup } from "telegraf";
 import { parseDuration } from "../utils/timeParser.js";
-import { isAdmin } from "../utils/adminCheck.js";
 
-const SUDOERS = [
-  "ThyMonster",
-  "RiverSung",
-  "ThyFang",
-  "ThyDivine",
-  "ThyDemise"
-];
+const H = {
+  noUser: "Finger missing. I can't see a target to curse.",
+  notAdmin: "You don't have the authority to command the King of Curses.",
+  botNotAdmin: "Tsk. Give me admin rights, or watch me do nothing.",
+  botNoRestrict: "I can't restrict anyone. Even a cursed finger has more power than this permission set.",
+  protected: "That one belongs to someone else. Even I have standards.",
+  self: "You want me to mute you? Fine by me. But it'll be boring.",
+  bot: "You're trying to mute the King of Curses? Ha.",
+  alreadyMuted: "They're already silenced. My shrine is already open.",
+  notMuted: "They can already speak. Don't waste my time.",
+  notInChat: "They're not even here. Useless.",
+  muted:
+    "╔══════════════════════════════╗\n" +
+    "║  ✦  M A L E V O L E N T    ✦║\n" +
+    "║  ✦  S H R I N E      ✦     ║\n" +
+    "╠══════════════════════════════╣\n" +
+    "║                              ║\n" +
+    "║  Dismantle — {user}           ║\n" +
+    "║  has been silenced.          ║\n" +
+    "║                              ║\n" +
+    "║  ── Reason ──                ║\n" +
+    "║  {reason}                    ║\n" +
+    "║                              ║\n" +
+    "╚══════════════════════════════╝",
+  tempMuted:
+    "╔══════════════════════════════╗\n" +
+    "║  ✦  M A L E V O L E N T    ✦║\n" +
+    "║  ✦  S H R I N E      ✦     ║\n" +
+    "╠══════════════════════════════╣\n" +
+    "║                              ║\n" +
+    "║  Cleave — {user}              ║\n" +
+    "║  silenced for {time}.          ║\n" +
+    "║                              ║\n" +
+    "╚══════════════════════════════╝",
+  noTime: "You forgot the time. How long do you want them gone?",
+  badTime: "That's not a valid time. Try <code>30m</code>, <code>2h</code>, or <code>1d</code>.",
+  unmuted:
+    "╔══════════════════════════════╗\n" +
+    "║  ✦  R E B U I L D     ✦    ║\n" +
+    "╠══════════════════════════════╣\n" +
+    "║  {user} has been granted     ║\n" +
+    "║  the right to speak again.   ║\n" +
+    "║  Don't make me open my       ║\n" +
+    "║  Domain again.              ║\n" +
+    "╚══════════════════════════════╝",
+  error: "Tsk. Even my Domain Expansion failed. Try again."
+};
 
-const MAX_MUTE = 99 * 86400; // 99 days
+function formatReason(r) {
+  if (!r) return "No reason given.";
+  return r.length > 200 ? r.slice(0, 200) + "..." : r;
+}
 
-export function muteCommand(bot) {
-  /* ─────────────── MUTE / TMUTE ─────────────── */
-  bot.command(["mute", "tmute"], async (ctx) => {
-    const replyId = ctx.message.message_id;
-    const issuer = ctx.from;
-    const mentionIssuer = `<a href="tg://user?id=${issuer.id}">${issuer.first_name}</a>`;
+async function extractTarget(ctx) {
+  const msg = ctx.message;
+  const args = ctx.message.text.split(/\s+/).slice(1).filter(Boolean);
 
+  if (msg.reply_to_message?.from) {
+    const f = msg.reply_to_message.from;
+    return { id: f.id, name: f.first_name || "User", reason: args.join(" ") };
+  }
+
+  if (msg.entities) {
+    for (const ent of msg.entities) {
+      if (ent.type === "text_mention" && ent.user) {
+        const rest = msg.text.slice(ent.offset + ent.length).trim();
+        return { id: ent.user.id, name: ent.user.first_name || "User", reason: rest };
+      }
+    }
+  }
+
+  if (args.length > 0) {
+    const num = Number(args[0]);
+    if (Number.isFinite(num)) {
+      return { id: num, name: "User", reason: args.slice(1).join(" ") };
+    }
+  }
+
+  return null;
+}
+
+async function botPerms(ctx) {
+  try {
+    const me = await ctx.telegram.getChatMember(ctx.chat.id, ctx.botInfo.id);
+    if (me.status !== "administrator") return "notAdmin";
+    if (!me.can_restrict_members) return "noRestrict";
+    return "ok";
+  } catch {
+    return "notAdmin";
+  }
+}
+
+async function isProtected(ctx, userId) {
+  if (userId === ctx.botInfo.id) return true;
+  try {
+    const m = await ctx.telegram.getChatMember(ctx.chat.id, userId);
+    return ["creator", "administrator"].includes(m.status);
+  } catch {
+    return false;
+  }
+}
+
+async function isCallerAdmin(ctx) {
+  try {
+    const m = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id);
+    return ["creator", "administrator"].includes(m.status);
+  } catch {
+    return false;
+  }
+}
+
+const MUTE_PERMS = {
+  can_send_messages: false,
+  can_send_media_messages: false,
+  can_send_other_messages: false,
+  can_add_web_page_previews: false,
+  can_send_polls: false,
+  can_change_info: false,
+  can_invite_users: false,
+  can_pin_messages: false
+};
+
+const UNMUTE_PERMS = {
+  can_send_messages: true,
+  can_send_media_messages: true,
+  can_send_other_messages: true,
+  can_add_web_page_previews: true,
+  can_send_polls: true,
+  can_change_info: true,
+  can_invite_users: true,
+  can_pin_messages: true
+};
+
+export function registerMutes(bot) {
+  bot.command(["mute", "smute"], async (ctx) => {
     try {
-      if (ctx.chat.type === "private") {
-        return ctx.reply(
-          "🚬 Gun: \"This only works in groups.\"",
-          { reply_to_message_id: replyId }
-        );
+      if (!ctx.message || !ctx.from) return;
+      if (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup") return;
+
+      if (!(await isCallerAdmin(ctx))) {
+        return ctx.reply(H.notAdmin, { reply_to_message_id: ctx.message.message_id });
       }
 
-      if (!(await isAdmin(ctx, issuer.id))) {
-        return ctx.reply(
-          "🚫 You lack authority.",
-          { reply_to_message_id: replyId }
-        );
+      const perms = await botPerms(ctx);
+      if (perms !== "ok") {
+        return ctx.reply(perms === "notAdmin" ? H.botNotAdmin : H.botNoRestrict, { reply_to_message_id: ctx.message.message_id });
       }
 
-      const target =
-        ctx.message.reply_to_message?.from ||
-        ctx.message.entities?.find(e => e.type === "text_mention")?.user;
+      const t = await extractTarget(ctx);
+      if (!t) return ctx.reply(H.noUser, { reply_to_message_id: ctx.message.message_id });
+      if (t.id === ctx.from.id) return ctx.reply(H.self, { reply_to_message_id: ctx.message.message_id });
+      if (t.id === ctx.botInfo.id) return ctx.reply(H.bot, { reply_to_message_id: ctx.message.message_id });
+      if (await isProtected(ctx, t.id)) return ctx.reply(H.protected, { reply_to_message_id: ctx.message.message_id });
 
-      if (!target) {
-        return ctx.reply(
-          "🚬 Gun: \"Who am I silencing? Reply or mention.\"",
-          { reply_to_message_id: replyId }
-        );
+      let member;
+      try { member = await ctx.telegram.getChatMember(ctx.chat.id, t.id); } catch { return ctx.reply(H.noUser, { reply_to_message_id: ctx.message.message_id }); }
+
+      if (member.can_send_messages === false) {
+        return ctx.reply(H.alreadyMuted, { reply_to_message_id: ctx.message.message_id });
       }
 
-      if (target.id === ctx.botInfo.id) {
-        return ctx.reply(
-          "🚬 Gun: \"I won't silence myself.\"",
-          { reply_to_message_id: replyId }
-        );
-      }
+      await ctx.telegram.restrictChatMember(ctx.chat.id, t.id, { permissions: MUTE_PERMS });
 
-      if (SUDOERS.includes(target.username)) {
-        return ctx.reply(
-          "🚬 Gun: \"Can't silence the elites.\"",
-          { reply_to_message_id: replyId }
-        );
-      }
-
-      if (await isAdmin(ctx, target.id)) {
-        return ctx.reply(
-          "🚬 Gun: \"Can't silence another admin.\"",
-          { reply_to_message_id: replyId }
-        );
-      }
-
-      const mentionTarget = `<a href="tg://user?id=${target.id}">${target.first_name}</a>`;
-      const args = ctx.message.text.split(" ").slice(1);
-
-      /* ───────────── TEMP MUTE ───────────── */
-      if (ctx.message.text.startsWith("/tmute")) {
-        const duration = parseDuration(args[0]);
-        const reason = args.slice(1).join(" ") || "No reason given";
-
-        if (!duration || duration > MAX_MUTE) {
-          return ctx.reply(
-            "🚬 Gun: \"Invalid time. Use 5m / 2h / 1d (max 99d).\"",
-            { reply_to_message_id: replyId }
-          );
-        }
-
-        const until = Math.floor(Date.now() / 1000) + duration;
-
-        await ctx.telegram.restrictChatMember(ctx.chat.id, target.id, {
-          permissions: { can_send_messages: false },
-          until_date: until
-        });
-
-        return ctx.reply(
-          `🔇 <b>TEMPORARY MUTE</b>\n\n` +
-          `🎯 Target: ${mentionTarget}\n` +
-          `👮 Enforcer: ${mentionIssuer}\n` +
-          `⏰ Duration: ${args[0]}\n` +
-          `📝 Reason: ${reason}\n\n` +
-          `🚬 Gun: "Silence. For now."`,
-          {
-            parse_mode: "HTML",
-            reply_to_message_id: replyId,
-            reply_markup: Markup.inlineKeyboard([
-              Markup.button.callback("🔊 Unmute", `unmute_${target.id}`)
-            ])
-          }
-        );
-      }
-
-      /* ───────────── PERMANENT MUTE ───────────── */
-      await ctx.telegram.restrictChatMember(ctx.chat.id, target.id, {
-        permissions: { can_send_messages: false }
-      });
-
-      return ctx.reply(
-        `🔇 <b>PERMANENT MUTE</b>\n\n` +
-        `🎯 Target: ${mentionTarget}\n` +
-        `👮 Enforcer: ${mentionIssuer}\n` +
-        `📝 Reason: ${args.join(" ") || "No reason given"}\n\n` +
-        `🚬 Gun: "Silenced. Permanently."`,
-        {
-          parse_mode: "HTML",
-          reply_to_message_id: replyId,
-          reply_markup: Markup.inlineKeyboard([
-            Markup.button.callback("🔊 Unmute", `unmute_${target.id}`)
-          ])
-        }
-      );
-
-    } catch (err) {
-      console.error("Mute error:", err);
       await ctx.reply(
-        `🚬 Gun: "Mute failed. ${err.message}"`,
-        { reply_to_message_id: replyId }
+        H.muted.replace("{user}", t.name).replace("{reason}", formatReason(t.reason)),
+        { parse_mode: "HTML", reply_to_message_id: ctx.message.message_id }
       );
+    } catch (err) {
+      console.error("MUTE ERROR:", err);
+      try { await ctx.reply(H.error, { reply_to_message_id: ctx.message.message_id }); } catch { /* */ }
     }
   });
 
-  /* ─────────────── UNMUTE / DUNMUTE ─────────────── */
-  bot.command(["unmute", "dunmute"], async (ctx) => {
-    const replyId = ctx.message.message_id;
+  bot.command(["tmute", "tempmute"], async (ctx) => {
+    try {
+      if (!ctx.message || !ctx.from) return;
+      if (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup") return;
 
-    if (!(await isAdmin(ctx, ctx.from.id))) {
-      return ctx.reply("🚫 You lack authority.", {
-        reply_to_message_id: replyId
-      });
-    }
-
-    const target =
-      ctx.message.reply_to_message?.from ||
-      ctx.message.entities?.find(e => e.type === "text_mention")?.user;
-
-    if (!target) {
-      return ctx.reply(
-        "🚬 Gun: \"Who speaks again?\"",
-        { reply_to_message_id: replyId }
-      );
-    }
-
-    const chat = await ctx.telegram.getChat(ctx.chat.id);
-
-    await ctx.telegram.restrictChatMember(ctx.chat.id, target.id, {
-      permissions: chat.permissions
-    });
-
-    return ctx.reply(
-      `🔊 <b>UNMUTED</b>\n\n` +
-      `🎯 User: <a href="tg://user?id=${target.id}">${target.first_name}</a>\n\n` +
-      `🚬 Gun: "Speak. Wisely."`,
-      {
-        parse_mode: "HTML",
-        reply_to_message_id: replyId
+      if (!(await isCallerAdmin(ctx))) {
+        return ctx.reply(H.notAdmin, { reply_to_message_id: ctx.message.message_id });
       }
-    );
+
+      const perms = await botPerms(ctx);
+      if (perms !== "ok") {
+        return ctx.reply(perms === "notAdmin" ? H.botNotAdmin : H.botNoRestrict, { reply_to_message_id: ctx.message.message_id });
+      }
+
+      const t = await extractTarget(ctx);
+      if (!t) return ctx.reply(H.noUser, { reply_to_message_id: ctx.message.message_id });
+      if (t.id === ctx.from.id) return ctx.reply(H.self, { reply_to_message_id: ctx.message.message_id });
+      if (t.id === ctx.botInfo.id) return ctx.reply(H.bot, { reply_to_message_id: ctx.message.message_id });
+      if (await isProtected(ctx, t.id)) return ctx.reply(H.protected, { reply_to_message_id: ctx.message.message_id });
+
+      let member;
+      try { member = await ctx.telegram.getChatMember(ctx.chat.id, t.id); } catch { return ctx.reply(H.noUser, { reply_to_message_id: ctx.message.message_id }); }
+
+      if (!t.reason) return ctx.reply(H.noTime, { reply_to_message_id: ctx.message.message_id });
+
+      const parts = t.reason.split(/\s+/);
+      const timeStr = parts[0];
+      const secs = parseDuration(timeStr);
+      if (!secs) return ctx.reply(H.badTime, { parse_mode: "HTML", reply_to_message_id: ctx.message.message_id });
+
+      if (member.can_send_messages === false) {
+        return ctx.reply(H.alreadyMuted, { reply_to_message_id: ctx.message.message_id });
+      }
+
+      const until = Math.floor(Date.now() / 1000) + secs;
+      await ctx.telegram.restrictChatMember(ctx.chat.id, t.id, {
+        permissions: MUTE_PERMS,
+        until_date: until
+      });
+
+      await ctx.reply(
+        H.tempMuted.replace("{user}", t.name).replace("{time}", timeStr),
+        { parse_mode: "HTML", reply_to_message_id: ctx.message.message_id }
+      );
+    } catch (err) {
+      console.error("TMUTE ERROR:", err);
+      try { await ctx.reply(H.error, { reply_to_message_id: ctx.message.message_id }); } catch { /* */ }
+    }
   });
 
-  /* ─────────────── UNMUTE CALLBACK ─────────────── */
-  bot.action(/^unmute_(\d+)$/, async (ctx) => {
-    const targetId = Number(ctx.match[1]);
+  bot.command("unmute", async (ctx) => {
+    try {
+      if (!ctx.message || !ctx.from) return;
+      if (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup") return;
 
-    if (!(await isAdmin(ctx, ctx.from.id))) {
-      return ctx.answerCbQuery("🚬 Gun: \"You lack authority.\"", {
-        show_alert: true
-      });
+      if (!(await isCallerAdmin(ctx))) {
+        return ctx.reply(H.notAdmin, { reply_to_message_id: ctx.message.message_id });
+      }
+
+      const perms = await botPerms(ctx);
+      if (perms !== "ok") {
+        return ctx.reply(perms === "notAdmin" ? H.botNotAdmin : H.botNoRestrict, { reply_to_message_id: ctx.message.message_id });
+      }
+
+      const t = await extractTarget(ctx);
+      if (!t) return ctx.reply(H.noUser, { reply_to_message_id: ctx.message.message_id });
+
+      let member;
+      try { member = await ctx.telegram.getChatMember(ctx.chat.id, t.id); } catch { return ctx.reply(H.notInChat, { reply_to_message_id: ctx.message.message_id }); }
+
+      if (member.status === "kicked" || member.status === "left") {
+        return ctx.reply(H.notInChat, { reply_to_message_id: ctx.message.message_id });
+      }
+
+      if (member.can_send_messages !== false) {
+        return ctx.reply(H.notMuted, { reply_to_message_id: ctx.message.message_id });
+      }
+
+      await ctx.telegram.restrictChatMember(ctx.chat.id, t.id, { permissions: UNMUTE_PERMS });
+
+      await ctx.reply(
+        H.unmuted.replace("{user}", t.name),
+        { parse_mode: "HTML", reply_to_message_id: ctx.message.message_id }
+      );
+    } catch (err) {
+      console.error("UNMUTE ERROR:", err);
+      try { await ctx.reply(H.error, { reply_to_message_id: ctx.message.message_id }); } catch { /* */ }
     }
-
-    const chat = await ctx.telegram.getChat(ctx.chat.id);
-
-    await ctx.telegram.restrictChatMember(ctx.chat.id, targetId, {
-      permissions: chat.permissions
-    });
-
-    await ctx.editMessageText(
-      `${ctx.callbackQuery.message.text}\n\n` +
-      `✅ <b>Unmuted by ${ctx.from.first_name}</b>`,
-      { parse_mode: "HTML" }
-    );
-
-    return ctx.answerCbQuery("Unmuted successfully!");
   });
 }

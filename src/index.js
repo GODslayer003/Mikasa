@@ -10,20 +10,23 @@ import { bot } from "./bot.js";
 
 // ─── DATABASE ──────────────────────────────
 import { connectDB } from "./db.js";
-import { startTatakaeRecoveryWorker } from "./services/tatakaeRecovery.js";
 import { User } from "./models/User.js";
 
 // ─── GLOBAL ACTIVITY TRACKER ───────────────
 import { trackActivity } from "./middleware/track.js";
+import { reputationMiddleware } from "./middleware/reputation.js";
+
+// ─── MIGRATION ─────────────────────────────
+import { migrateLegacyCurrency } from "./migrateStars.js";
 
 // ─── COMMANDS ──────────────────────────────
-import { startCommand } from "./commands/start.js";
-import { topperCommand } from "./commands/topper.js";
-import { banCommand } from "./commands/ban.js";
-import { muteCommand } from "./commands/mute.js";
-import { profileCommand } from "./commands/profile.js";
-import { helpCommand } from "./commands/help.js";
-import { estateCommand } from "./commands/estate.js";
+import { ariseCommand } from "./commands/arise.js";
+import { dailyCommand } from "./commands/daily.js";
+import { weeklyCommand } from "./commands/weekly.js";
+import { repCommand } from "./commands/rep.js";
+import { registerAfk } from "./commands/afk.js";
+import { registerBans } from "./commands/bans.js";
+import { registerMutes } from "./commands/mute.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -110,8 +113,8 @@ async function start() {
         {
           $group: {
             _id: null,
-            totalRp: { $sum: { $ifNull: ["$rp", "$balance"] } },
-            totalWorkers: { $sum: { $size: { $ifNull: ["$shadows", []] } } }
+            totalStars: { $sum: { $ifNull: ["$stars", 0] } },
+            totalIncarnations: { $sum: { $size: { $ifNull: ["$shadows", []] } } }
           }
         }
       ])
@@ -119,8 +122,8 @@ async function start() {
     res.json({
       users,
       bannedUsers,
-      totalRp: aggregate[0]?.totalRp || 0,
-      totalWorkers: aggregate[0]?.totalWorkers || 0,
+      totalStars: aggregate[0]?.totalStars || 0,
+      totalIncarnations: aggregate[0]?.totalIncarnations || 0,
       recentErrors: recentErrors.slice(0, 12)
     });
   });
@@ -141,11 +144,11 @@ async function start() {
       telegramId: user.telegramId,
       firstName: user.firstName,
       username: user.username,
-      // Prefer `balance` as authoritative; fall back to `rp` or `moons`.
-      rp: (typeof user.balance === 'number' ? user.balance : (typeof user.rp === 'number' ? user.rp : (typeof user.moons === 'number' ? user.moons : 0))),
+      stars: user.stars ?? 0,
+      reputation: user.reputation ?? 0,
       hp: user.hp ?? 100,
       isBanned: Boolean(user.isBanned),
-      workers: user.shadows?.length || 0,
+      incarnations: user.shadows?.length || 0,
       totalPower: user.totalPower || 0,
       totalStars: user.totalStars || 0,
       scamWins: user.scamWins || 0,
@@ -161,16 +164,13 @@ async function start() {
   });
 
   app.patch("/api/admin/users/:telegramId", requireAdmin, async (req, res) => {
-    const allowed = ["rp", "hp", "isBanned", "workerMorale", "javierProtectionUntil", "javierCooldownUntil", "shadows"];
+    const allowed = ["stars", "hp", "isBanned", "shadows"];
     const update = {};
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(req.body, key)) update[key] = req.body[key];
     }
-    if (Object.prototype.hasOwnProperty.call(update, "rp")) {
-      const rp = Math.max(0, Math.floor(Number(update.rp) || 0));
-      update.rp = rp;
-      update.balance = rp;
-      update.moons = rp;
+    if (Object.prototype.hasOwnProperty.call(update, "stars")) {
+      update.stars = Math.max(0, Math.floor(Number(update.stars) || 0));
     }
     if (Object.prototype.hasOwnProperty.call(update, "hp")) {
       update.hp = Math.max(0, Math.min(100, Math.floor(Number(update.hp) || 0)));
@@ -211,8 +211,12 @@ async function start() {
   // Connect DB
   await connectDB();
 
+  // Migrate legacy currency → stars
+  await migrateLegacyCurrency();
+
   // GLOBAL TRACKER
   bot.use(trackActivity);
+  reputationMiddleware(bot);
   bot.catch((err, ctx) => {
     recordError("telegram", err, {
       updateType: ctx?.updateType,
@@ -224,14 +228,13 @@ async function start() {
   });
 
   // Register commands
-  startCommand(bot);
-  estateCommand(bot);
-  topperCommand(bot);
-  banCommand(bot);
-  muteCommand(bot);
-  profileCommand(bot);
-  helpCommand(bot);
-  startTatakaeRecoveryWorker(bot);
+  ariseCommand(bot);
+  dailyCommand(bot);
+  weeklyCommand(bot);
+  repCommand(bot);
+  registerAfk(bot);
+  registerBans(bot);
+  registerMutes(bot);
 
   await launchBotWithRetry();
 }
