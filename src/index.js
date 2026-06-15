@@ -27,6 +27,9 @@ import { weeklyCommand } from "./commands/weekly.js";
 import { registerAfk } from "./commands/afk.js";
 import { registerBans } from "./commands/bans.js";
 import { registerMutes } from "./commands/mute.js";
+import { registerKarma } from "./commands/karma.js";
+import { registerArisers } from "./commands/arisers.js";
+import { registerShadows } from "./commands/shadows.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,7 +56,7 @@ async function launchBotWithRetry() {
     try {
       await bot.launch({
         dropPendingUpdates: true,
-        allowedUpdates: ["message", "callback_query", "chat_member", "my_chat_member"]
+        allowedUpdates: ["message", "callback_query", "inline_query", "chat_member", "my_chat_member"]
       });
       console.log("🤖 Monster Bot is running");
       return;
@@ -235,6 +238,9 @@ async function start() {
   registerAfk(bot);
   registerBans(bot);
   registerMutes(bot);
+  registerKarma(bot);
+  registerArisers(bot);
+  registerShadows(bot);
 
   await launchBotWithRetry();
 }

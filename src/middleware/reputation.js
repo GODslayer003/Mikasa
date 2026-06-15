@@ -43,9 +43,11 @@ const WARNING_WORDS = [
 function matchesList(text, list) {
   const lower = text.toLowerCase();
   return list.some((word) => {
-    if (word.length <= 2) return lower.includes(word);
-    const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-    return regex.test(lower);
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (/^[a-z]+$/i.test(word)) {
+      return new RegExp(`\\b${escaped}\\b`, "i").test(lower);
+    }
+    return lower.includes(escaped);
   });
 }
 
@@ -84,8 +86,9 @@ export function reputationMiddleware(bot) {
         await user.save();
 
         await ctx.reply(
-          `🖤 <b>Sylus</b>\n` +
-          `Tsk, such a dirty mouth for someone so pretty~ <b>${firstName}</b> lost <b>10 Karma</b>. Total: <b>${user.reputation}</b>`,
+          `Now, now... such a mouth on you, <a href="tg://user?id=${userId}">${firstName}</a>~ You lost <b>10 Karma</b>.\n` +
+          `Total: <b>${user.reputation}</b>\n` +
+          `— Sylus 🖤`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
@@ -112,9 +115,11 @@ export function reputationMiddleware(bot) {
         await target.save();
 
         const targetName = repliedUser.first_name || "User";
+        const targetId = repliedUser.id;
         await ctx.reply(
-          `🖤 <b>Sylus</b>\n` +
-          `Mmm, looks like someone caught your eye~ <b>${targetName}</b> earned <b>+1 Karma</b>. Total: <b>${target.reputation}</b>`,
+          `Mmm, you've made quite the impression, darling~ <a href="tg://user?id=${targetId}">${targetName}</a> earned <b>+1 Karma</b>.\n` +
+          `Total: <b>${target.reputation}</b>\n` +
+          `— Sylus 🖤`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
@@ -127,9 +132,11 @@ export function reputationMiddleware(bot) {
         await target.save();
 
         const targetName = repliedUser.first_name || "User";
+        const targetId = repliedUser.id;
         await ctx.reply(
-          `🖤 <b>Sylus</b>\n` +
-          `Not everyone can handle this much charm, huh~ <b>${targetName}</b> lost <b>1 Karma</b>. Total: <b>${target.reputation}</b>`,
+          `Not everyone can appreciate true elegance, it seems~ <a href="tg://user?id=${targetId}">${targetName}</a> lost <b>1 Karma</b>.\n` +
+          `Total: <b>${target.reputation}</b>\n` +
+          `— Sylus 🖤`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id

@@ -52,6 +52,10 @@ const userSchema = new mongoose.Schema(
     defeatedChatTitle: { type: String, default: null },
     mikasaProtectionUntil: { type: Number, default: 0 }, // Protection from Mikasa image
 
+    // ─── ARISE PITY SYSTEM ─────────────────────────
+    pityCount: { type: Number, default: 0 },
+    ariseCount: { type: Number, default: 0 },
+
     // ─── REPUTATION ────────────────────────────────
     reputation: { type: Number, default: 0 },
 
