@@ -11,54 +11,25 @@ const H = {
   botNotAdmin: "I need admin privileges to use my Domain Expansion.",
   botNoRestrict: "I can't restrict members. Give me the permission, or watch me struggle.",
   banned:
-    "╔══════════════════════════════╗\n" +
-    "║   ✦  D O M A I N   ✦      ║\n" +
-    "║   ✦  E X P A N S I O N  ✦ ║\n" +
-    "╠══════════════════════════════╣\n" +
-    "║                              ║\n" +
-    "║  ✦ Unlimited Void ✦          ║\n" +
-    "║                              ║\n" +
-    "║  {user} has been sealed      ║\n" +
-    "║  in infinite information.    ║\n" +
-    "║                              ║\n" +
-    "║  ── Reason ──                ║\n" +
-    "║  {reason}                    ║\n" +
-    "║                              ║\n" +
-    "╚══════════════════════════════╝",
+    "◈ <b>Domain Expansion</b>\n" +
+    "◈ Unlimited Void\n\n" +
+    "<b>{user}</b> has been sealed in infinite information.\n" +
+    "<b>Reason:</b> {reason}",
   tempBanned:
-    "╔══════════════════════════════╗\n" +
-    "║   ✦  P R I S O N    ✦      ║\n" +
-    "║   ✦  R E A L M    ✦        ║\n" +
-    "╠══════════════════════════════╣\n" +
-    "║                              ║\n" +
-    "║  {user} has been sealed      ║\n" +
-    "║  for {time}.                  ║\n" +
-    "║                              ║\n" +
-    "║  Like Toji in the Prison     ║\n" +
-    "║  Realm.                      ║\n" +
-    "║                              ║\n" +
-    "╚══════════════════════════════╝",
+    "◈ <b>Prison Realm</b>\n\n" +
+    "<b>{user}</b> has been sealed for <b>{time}</b>.\n" +
+    "Like Toji in the Prison Realm.",
   noTime: "You forgot to specify the time. How many seconds do you think I have?",
   badTime: "That's not a valid time format. Try <code>30m</code>, <code>2h</code>, or <code>1d</code>.",
   unban:
-    "╔══════════════════════════════╗\n" +
-    "║  ✦  R E V E R S E    ✦     ║\n" +
-    "║  ✦  C U R S E D     ✦      ║\n" +
-    "║  ✦  T E C H N I Q U E   ✦  ║\n" +
-    "╠══════════════════════════════╣\n" +
-    "║  {user} has been unsealed.   ║\n" +
-    "║  They can return to the      ║\n" +
-    "║  world of jujutsu.          ║\n" +
-    "╚══════════════════════════════╝",
+    "◈ <b>Reverse Cursed Technique</b>\n\n" +
+    "<b>{user}</b> has been unsealed.\n" +
+    "They can return to the world of jujutsu.",
   unbanNotFound: "They're not sealed here. My Six Eyes can see that much.",
   punch:
-    "╔══════════════════════════════╗\n" +
-    "║  ✦   C U R S E D    ✦      ║\n" +
-    "║  ✦   T E C H N I Q U E  ✦  ║\n" +
-    "╠══════════════════════════════╣\n" +
-    "║  {user} was dispatched.      ║\n" +
-    "║  Like a disaster curse.      ║\n" +
-    "╚══════════════════════════════╝",
+    "◈ <b>Cursed Technique</b>\n\n" +
+    "<b>{user}</b> was dispatched.\n" +
+    "Like a disaster curse.",
   punchme: "You really just punched yourself out... You're not him.",
   punchmeAdmin: "I can't punch an admin out. That'd be bad for the story.",
   error: "Tsk. Something went wrong. Even the strongest has off days."

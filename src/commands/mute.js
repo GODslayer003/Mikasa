@@ -12,39 +12,20 @@ const H = {
   notMuted: "They can already speak. Don't waste my time.",
   notInChat: "They're not even here. Useless.",
   muted:
-    "╔══════════════════════════════╗\n" +
-    "║  ✦  M A L E V O L E N T    ✦║\n" +
-    "║  ✦  S H R I N E      ✦     ║\n" +
-    "╠══════════════════════════════╣\n" +
-    "║                              ║\n" +
-    "║  Dismantle — {user}           ║\n" +
-    "║  has been silenced.          ║\n" +
-    "║                              ║\n" +
-    "║  ── Reason ──                ║\n" +
-    "║  {reason}                    ║\n" +
-    "║                              ║\n" +
-    "╚══════════════════════════════╝",
+    "◈ <b>Malevolent Shrine</b>\n" +
+    "◈ Dismantle\n\n" +
+    "<b>{user}</b> has been silenced.\n" +
+    "<b>Reason:</b> {reason}",
   tempMuted:
-    "╔══════════════════════════════╗\n" +
-    "║  ✦  M A L E V O L E N T    ✦║\n" +
-    "║  ✦  S H R I N E      ✦     ║\n" +
-    "╠══════════════════════════════╣\n" +
-    "║                              ║\n" +
-    "║  Cleave — {user}              ║\n" +
-    "║  silenced for {time}.          ║\n" +
-    "║                              ║\n" +
-    "╚══════════════════════════════╝",
+    "◈ <b>Malevolent Shrine</b>\n" +
+    "◈ Cleave\n\n" +
+    "<b>{user}</b> silenced for <b>{time}</b>.",
   noTime: "You forgot the time. How long do you want them gone?",
   badTime: "That's not a valid time. Try <code>30m</code>, <code>2h</code>, or <code>1d</code>.",
   unmuted:
-    "╔══════════════════════════════╗\n" +
-    "║  ✦  R E B U I L D     ✦    ║\n" +
-    "╠══════════════════════════════╣\n" +
-    "║  {user} has been granted     ║\n" +
-    "║  the right to speak again.   ║\n" +
-    "║  Don't make me open my       ║\n" +
-    "║  Domain again.              ║\n" +
-    "╚══════════════════════════════╝",
+    "◈ <b>Rebuild</b>\n\n" +
+    "<b>{user}</b> has been granted the right to speak again.\n" +
+    "Don't make me open my Domain again.",
   error: "Tsk. Even my Domain Expansion failed. Try again."
 };
 

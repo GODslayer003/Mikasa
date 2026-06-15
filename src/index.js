@@ -23,7 +23,7 @@ import { migrateLegacyCurrency } from "./migrateStars.js";
 import { ariseCommand } from "./commands/arise.js";
 import { dailyCommand } from "./commands/daily.js";
 import { weeklyCommand } from "./commands/weekly.js";
-import { repCommand } from "./commands/rep.js";
+
 import { registerAfk } from "./commands/afk.js";
 import { registerBans } from "./commands/bans.js";
 import { registerMutes } from "./commands/mute.js";
@@ -231,7 +231,7 @@ async function start() {
   ariseCommand(bot);
   dailyCommand(bot);
   weeklyCommand(bot);
-  repCommand(bot);
+
   registerAfk(bot);
   registerBans(bot);
   registerMutes(bot);

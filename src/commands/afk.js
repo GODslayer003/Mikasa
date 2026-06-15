@@ -1,5 +1,4 @@
 import { User } from "../models/User.js";
-import { getDojkaQuote } from "../services/dojkaAssets.js";
 
 const REASON_MAX = 100;
 
@@ -20,18 +19,18 @@ function formatDuration(seconds) {
 }
 
 const BACK_PHRASES = [
-  "✦ {name} has returned to the scenario.",
-  "✦ {name} is back in the Star Stream.",
-  "✦ The story continues — {name} has rejoined.",
-  "✦ {name} is no longer AFK.",
-  "✦ Welcome back, {name}.",
-  "✦ {name} has logged back into the scenario.",
-  "✦ {name} is back. Don't keep the constellations waiting.",
-  "✦ {name} has returned from the void.",
-  "✦ {name} is back in the chat. Probability restored.",
-  "✦ A reader has returned. Turn the page — {name} is here.",
-  "✦ {name} is no longer away. Resume your story.",
-  "✦ {name} woke up. The scenarios can continue."
+  "蛊 {name} has emerged from seclusion, a new Gu refined.",
+  "蛊 {name} returns — the path of cultivation continues.",
+  "蛊 {name} has finished their secluded cultivation and rejoins the world.",
+  "蛊 The Gu have been tamed — {name} is back.",
+  "蛊 {name} returns from the mountains, their Dao strengthened.",
+  "蛊 A period of meditation complete — {name} has returned.",
+  "蛊 {name} steps back into the mortal realm, Gu in hand.",
+  "蛊 The teachings persist — {name} has returned from cultivation.",
+  "蛊 {name} is no longer in seclusion. The world awaits.",
+  "蛊 Having gained insight, {name} returns from their journey.",
+  "蛊 {name} returns, will unshaken, Gu ready.",
+  "蛊 Another cycle of cultivation complete — {name} has returned."
 ];
 
 function getAfkReply(user, firstName) {
@@ -40,31 +39,15 @@ function getAfkReply(user, firstName) {
 
   if (user.afkReason) {
     return (
-      `╔══════════════════════════════╗\n` +
-      `║      ✦   A F K   ✦         ║\n` +
-      `╠══════════════════════════════╣\n` +
-      `║                              ║\n` +
-      `║  🌙  <b>${firstName}</b> is away.    ║\n` +
-      `║                              ║\n` +
-      `║  ─ Reason ─                  ║\n` +
-      `║  <code>${user.afkReason}</code>            ║\n` +
-      `║                              ║\n` +
-      `║  ⏰ ${timeStr}                ║\n` +
-      `║                              ║\n` +
-      `╚══════════════════════════════╝`
+      `𖤍 <b>${firstName}</b> is in secluded cultivation.\n` +
+      `<b>Reason:</b> <code>${user.afkReason}</code>\n` +
+      `⏰ ${timeStr}`
     );
   }
 
   return (
-    `╔══════════════════════════════╗\n` +
-    `║      ✦   A F K   ✦         ║\n` +
-    `╠══════════════════════════════╣\n` +
-    `║                              ║\n` +
-    `║  🌙  <b>${firstName}</b> is away.    ║\n` +
-    `║                              ║\n` +
-    `║  ⏰ ${timeStr}                ║\n` +
-    `║                              ║\n` +
-    `╚══════════════════════════════╝`
+    `𖤍 <b>${firstName}</b> is in secluded cultivation.\n` +
+    `⏰ ${timeStr}`
   );
 }
 
@@ -107,8 +90,8 @@ export function registerAfk(bot) {
       );
 
       const msg = reason
-        ? `🌙 <b>${firstName}</b> is now AFK.\nReason: <code>${reason}</code>${notice}`
-        : `🌙 <b>${firstName}</b> is now AFK.${notice}`;
+        ? `𖤍 <b>${firstName}</b> has entered secluded cultivation.\n<b>Reason:</b> <code>${reason}</code>${notice}`
+        : `𖤍 <b>${firstName}</b> has entered secluded cultivation.${notice}`;
 
       await ctx.reply(msg, {
         parse_mode: "HTML",
@@ -157,8 +140,8 @@ export function registerAfk(bot) {
       );
 
       const msg = reason
-        ? `🌙 <b>${firstName}</b> is now AFK.\nReason: <code>${reason}</code>${notice}`
-        : `🌙 <b>${firstName}</b> is now AFK.${notice}`;
+        ? `𖤍 <b>${firstName}</b> has entered secluded cultivation.\n<b>Reason:</b> <code>${reason}</code>${notice}`
+        : `𖤍 <b>${firstName}</b> has entered secluded cultivation.${notice}`;
 
       await ctx.reply(msg, {
         parse_mode: "HTML",

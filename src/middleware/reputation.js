@@ -29,7 +29,7 @@ const DECREMENT_WORDS = [
 const WARNING_WORDS = [
   "wtf", "fuck", "fck", "fukk", "fuk",
   "tf", "the fuck", "what the fuck",
-  "nigga", "nigger", "niga", "niga",
+  "nigga", "nigger", "niga",
   "mc", "m*c", "m.c",
   "bsdk", "bhosadike", "bhosadi ke",
   "chutiya", "chutiye", "madarchod", "maderchod",
@@ -40,13 +40,6 @@ const WARNING_WORDS = [
   "laud", "lode", "loda"
 ];
 
-function normalize(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s@+]|[\u{1F600}-\u{1FFFF}]/gu, "")
-    .trim();
-}
-
 function matchesList(text, list) {
   const lower = text.toLowerCase();
   return list.some((word) => {
@@ -54,6 +47,21 @@ function matchesList(text, list) {
     const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
     return regex.test(lower);
   });
+}
+
+async function ensureUser(telegramId, firstName) {
+  let user = await User.findOne({ telegramId });
+  if (!user) {
+    user = await User.create({
+      telegramId,
+      firstName: firstName || "User",
+      reputation: 0,
+      firstSeenAt: Math.floor(Date.now() / 1000),
+      lastSeenAt: Math.floor(Date.now() / 1000)
+    });
+  }
+  if (typeof user.reputation !== "number") user.reputation = 0;
+  return user;
 }
 
 export function reputationMiddleware(bot) {
@@ -65,47 +73,65 @@ export function reputationMiddleware(bot) {
       const userId = ctx.from.id;
       const firstName = ctx.from.first_name || "User";
       const chatType = ctx.chat?.type;
+      const now = Math.floor(Date.now() / 1000);
 
       const hasWarning = matchesList(text, WARNING_WORDS);
 
       if (hasWarning && (chatType === "group" || chatType === "supergroup")) {
+        let user = await ensureUser(userId, firstName);
+        user.reputation -= 10;
+        user.lastSeenAt = now;
+        await user.save();
+
         await ctx.reply(
-          `╔══════════════════════════════╗\n` +
-          `║    ✦   M A N N E R S   ✦    ║\n` +
-          `╠══════════════════════════════╣\n` +
-          `║                              ║\n` +
-          `║  ┏━ •❃• ━┓                  ║\n` +
-          `║  ┃   ❛Manners Is Everything❜ ┃  ║\n` +
-          `║  ┗━ •❃• ━┛                  ║\n` +
-          `║                              ║\n` +
-          `║  👑 Owner: @MoonsGC          ║\n` +
-          `║                              ║\n` +
-          `╚══════════════════════════════╝`,
+          `🐦‍⬛ <b>${firstName}</b>, your words carry weight. Karma: <b>${user.reputation}</b> (-10)`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
           }
         );
-        return;
+        return next();
       }
 
       if (chatType !== "group" && chatType !== "supergroup") return next();
 
-      let user = await User.findOne({ telegramId: userId });
-      if (!user) return next();
-      if (typeof user.reputation !== "number") user.reputation = 0;
+      const isReply = ctx.message.reply_to_message;
+      if (!isReply) return next();
+
+      const repliedUser = ctx.message.reply_to_message.from;
+      if (!repliedUser || repliedUser.is_bot || repliedUser.id === userId) return next();
 
       const hasIncrement = matchesList(text, INCREMENT_WORDS);
       const hasDecrement = matchesList(text, DECREMENT_WORDS);
 
       if (hasIncrement && !hasDecrement) {
-        user.reputation += 1;
-        user.lastSeenAt = Math.floor(Date.now() / 1000);
-        await user.save();
+        let target = await ensureUser(repliedUser.id, repliedUser.first_name);
+        target.reputation += 1;
+        target.lastSeenAt = now;
+        await target.save();
+
+        const targetName = repliedUser.first_name || "User";
+        await ctx.reply(
+          `🐦‍⬛ <b>${targetName}</b> — a flicker of recognition. Karma: <b>+1</b> (${target.reputation})`,
+          {
+            parse_mode: "HTML",
+            reply_to_message_id: ctx.message.message_id
+          }
+        );
       } else if (hasDecrement && !hasIncrement) {
-        user.reputation -= 1;
-        user.lastSeenAt = Math.floor(Date.now() / 1000);
-        await user.save();
+        let target = await ensureUser(repliedUser.id, repliedUser.first_name);
+        target.reputation -= 1;
+        target.lastSeenAt = now;
+        await target.save();
+
+        const targetName = repliedUser.first_name || "User";
+        await ctx.reply(
+          `🐦‍⬛ <b>${targetName}</b> — the shadows deepen. Karma: <b>-1</b> (${target.reputation})`,
+          {
+            parse_mode: "HTML",
+            reply_to_message_id: ctx.message.message_id
+          }
+        );
       }
     } catch (err) {
       console.error("REPUTATION MIDDLEWARE ERROR:", err);
