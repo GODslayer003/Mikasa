@@ -84,7 +84,8 @@ export function reputationMiddleware(bot) {
         await user.save();
 
         await ctx.reply(
-          `🐦‍⬛ <b>${firstName}</b>, your words carry weight. Karma: <b>${user.reputation}</b> (-10)`,
+          `🖤 <b>Sylus</b>\n` +
+          `Tsk, such a dirty mouth for someone so pretty~ <b>${firstName}</b> lost <b>10 Karma</b>. Total: <b>${user.reputation}</b>`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
@@ -112,7 +113,8 @@ export function reputationMiddleware(bot) {
 
         const targetName = repliedUser.first_name || "User";
         await ctx.reply(
-          `🐦‍⬛ <b>${targetName}</b> — a flicker of recognition. Karma: <b>+1</b> (${target.reputation})`,
+          `🖤 <b>Sylus</b>\n` +
+          `Mmm, looks like someone caught your eye~ <b>${targetName}</b> earned <b>+1 Karma</b>. Total: <b>${target.reputation}</b>`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
@@ -126,7 +128,8 @@ export function reputationMiddleware(bot) {
 
         const targetName = repliedUser.first_name || "User";
         await ctx.reply(
-          `🐦‍⬛ <b>${targetName}</b> — the shadows deepen. Karma: <b>-1</b> (${target.reputation})`,
+          `🖤 <b>Sylus</b>\n` +
+          `Not everyone can handle this much charm, huh~ <b>${targetName}</b> lost <b>1 Karma</b>. Total: <b>${target.reputation}</b>`,
           {
             parse_mode: "HTML",
             reply_to_message_id: ctx.message.message_id
