@@ -84,6 +84,8 @@ export function ariseCommand(bot) {
 
       // ─── SEND SUSPENSE GIF ───────────────────────
       const gifPath = pickGif(levelKey);
+      let gifMsgId = null;
+
       if (gifPath && /\.gif$/i.test(gifPath)) {
         const suspenseText =
           levelKey === "MOONS"
@@ -92,7 +94,7 @@ export function ariseCommand(bot) {
               ? `🗡️ <b>Shadow Extraction</b>\nA powerful presence emerges from the gate...`
               : `🗡️ <b>Shadow Extraction</b>\nThe gates open... a shadow stirs.`;
 
-        await ctx.replyWithAnimation(
+        const gifMsg = await ctx.replyWithAnimation(
           { source: gifPath },
           {
             caption: suspenseText,
@@ -100,6 +102,7 @@ export function ariseCommand(bot) {
             reply_to_message_id: ctx.message.message_id
           }
         );
+        gifMsgId = gifMsg.message_id;
       }
 
       // ─── RESOLVE PITY ────────────────────────────
@@ -115,6 +118,9 @@ export function ariseCommand(bot) {
       const charFile = randomFile(folder);
 
       if (!charFile) {
+        if (gifMsgId) {
+          ctx.telegram.deleteMessage(ctx.chat.id, gifMsgId).catch(() => {});
+        }
         return ctx.reply(
           `🗡️ <b>No Shadows Available</b>\n\n` +
           `${levelData.emoji} <b>${levelData.label}</b> has no shadows to summon.\n\n` +
@@ -170,16 +176,29 @@ export function ariseCommand(bot) {
         `━━━━━━━━━━━━━━━━━━\n` +
         `— Sung Jin Woo 🗡️`;
 
-      if (/\.gif$/i.test(charFile)) {
-        await ctx.replyWithAnimation(
-          { source: charFile },
-          { caption, parse_mode: "HTML" }
-        );
+      const chatId = ctx.chat.id;
+      const origMsgId = ctx.message.message_id;
+
+      if (gifMsgId) {
+        setTimeout(async () => {
+          try {
+            await ctx.telegram.deleteMessage(chatId, gifMsgId);
+          } catch (_) {}
+
+          try {
+            if (/\.gif$/i.test(charFile)) {
+              await ctx.telegram.sendAnimation(chatId, { source: charFile }, { caption, parse_mode: "HTML", reply_to_message_id: origMsgId });
+            } else {
+              await ctx.telegram.sendPhoto(chatId, { source: charFile }, { caption, parse_mode: "HTML", reply_to_message_id: origMsgId });
+            }
+          } catch (_) {}
+        }, 3000);
       } else {
-        await ctx.replyWithPhoto(
-          { source: charFile },
-          { caption, parse_mode: "HTML" }
-        );
+        if (/\.gif$/i.test(charFile)) {
+          await ctx.replyWithAnimation({ source: charFile }, { caption, parse_mode: "HTML" });
+        } else {
+          await ctx.replyWithPhoto({ source: charFile }, { caption, parse_mode: "HTML" });
+        }
       }
 
     } catch (err) {
